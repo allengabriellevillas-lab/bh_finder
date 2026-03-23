@@ -1,4 +1,4 @@
-﻿<?php
+<?php
 require_once __DIR__ . '/../includes/config.php';
 
 $id = intval($_GET['id'] ?? 0);
@@ -40,7 +40,7 @@ $amenities = $amenitiesStmt->fetchAll() ?: [];
 $typeLabels = ['solo_room' => 'Solo Room', 'shared_room' => 'Shared Room', 'studio' => 'Studio', 'apartment' => 'Apartment'];
 
 $bhName = (string)($bh['name'] ?? 'Listing');
-$bhLocation = trim((string)($bh['location'] ?? ''));
+$bhLocation = trim((string)($bh['location'] ?? ($bh['address'] ?? '')));
 $bhCity = trim((string)($bh['city'] ?? ''));
 $bhFullLocation = trim($bhLocation . (($bhLocation !== '' && $bhCity !== '') ? ', ' : '') . $bhCity);
 $bhType = (string)($bh['accommodation_type'] ?? '');
@@ -53,6 +53,9 @@ $bhContactPhone = trim((string)($bh['contact_phone'] ?? ($bh['owner_phone'] ?? '
 $bhContactEmail = trim((string)($bh['contact_email'] ?? ($bh['owner_email'] ?? '')));
 $ownerName = (string)($bh['owner_name'] ?? 'Owner');
 $ownerSince = (string)($bh['owner_since'] ?? '');
+$bhMapQuery = $bhFullLocation !== '' ? rawurlencode($bhFullLocation) : '';
+$bhMapEmbedUrl = $bhMapQuery !== '' ? ("https://www.google.com/maps?q={$bhMapQuery}&output=embed") : '';
+$bhMapLinkUrl = $bhMapQuery !== '' ? ("https://www.google.com/maps?q={$bhMapQuery}") : '';
 
 // Handle contact form
 $contactSuccess = false;
@@ -148,6 +151,28 @@ require_once __DIR__ . '/../includes/header.php';
         <div class="detail-section">
           <h2 class="detail-section-title"><i class="fas fa-info-circle" style="color:var(--primary)"></i> About this place</h2>
           <p style="color:var(--text-muted);line-height:1.8"><?= nl2br(sanitize($bh['description'])) ?></p>
+        </div>
+      <?php endif; ?>
+
+      <!-- Map -->
+      <?php if ($bhMapEmbedUrl !== ''): ?>
+        <div class="detail-section">
+          <div class="detail-section-title" style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+            <span><i class="fas fa-map" style="color:var(--primary)"></i> Location</span>
+            <a class="btn btn-outline btn-sm" href="<?= sanitize($bhMapLinkUrl) ?>" target="_blank" rel="noopener noreferrer">
+              <i class="fas fa-external-link-alt"></i> Open in Maps
+            </a>
+          </div>
+          <div class="map-embed">
+            <iframe
+              title="Map for <?= sanitize($bhName) ?>"
+              src="<?= sanitize($bhMapEmbedUrl) ?>"
+              loading="lazy"
+              referrerpolicy="no-referrer-when-downgrade"
+              allowfullscreen
+            ></iframe>
+          </div>
+          <p class="text-sm text-muted mt-2"><?= sanitize($bhFullLocation) ?></p>
         </div>
       <?php endif; ?>
 
