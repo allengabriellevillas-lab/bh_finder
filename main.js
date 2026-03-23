@@ -27,6 +27,215 @@ document.addEventListener('DOMContentLoaded', function () {
         document.addEventListener('click', () => userDropdown.classList.remove('open'));
     }
 
+    // ── Custom Select (styled dropdown) ──
+    (function initCustomSelects() {
+        const isTouchLike =
+            window.matchMedia?.('(pointer: coarse)')?.matches ||
+            ('ontouchstart' in window) ||
+            (navigator.maxTouchPoints || 0) > 0;
+
+        if (isTouchLike) return; // keep native selects on touch devices
+
+        const openSet = new Set();
+
+        function close(cs) {
+            if (!cs) return;
+            cs.classList.remove('open');
+            const btn = cs.querySelector('.cs-btn');
+            if (btn) btn.setAttribute('aria-expanded', 'false');
+            openSet.delete(cs);
+        }
+
+        function open(cs) {
+            if (!cs) return;
+            Array.from(openSet).forEach(other => { if (other !== cs) close(other); });
+            cs.classList.add('open');
+            const btn = cs.querySelector('.cs-btn');
+            if (btn) btn.setAttribute('aria-expanded', 'true');
+            openSet.add(cs);
+        }
+
+        function toggle(cs) {
+            if (!cs) return;
+            cs.classList.contains('open') ? close(cs) : open(cs);
+        }
+
+        function getEnabledOptions(menu) {
+            return Array.from(menu.querySelectorAll('.cs-opt')).filter(b => !b.disabled);
+        }
+
+        function focusSelected(menu, preferLast = false) {
+            const opts = getEnabledOptions(menu);
+            if (!opts.length) return;
+            const selected = menu.querySelector('.cs-opt[aria-selected=\"true\"]:not(:disabled)');
+            (selected || (preferLast ? opts[opts.length - 1] : opts[0])).focus();
+        }
+
+        function moveFocus(menu, delta) {
+            const opts = getEnabledOptions(menu);
+            if (!opts.length) return;
+            const active = document.activeElement;
+            const idx = Math.max(0, opts.indexOf(active));
+            const next = opts[(idx + delta + opts.length) % opts.length];
+            next?.focus();
+        }
+
+        function enhanceSelect(select) {
+            if (!select || select.closest('.cs')) return;
+            if (select.multiple || (select.size && select.size > 1)) return;
+            if (select.dataset.noCustomSelect !== undefined) return;
+
+            const cs = document.createElement('div');
+            cs.className = 'cs';
+            const inlineStyle = select.getAttribute('style');
+            if (inlineStyle) cs.setAttribute('style', inlineStyle);
+
+            select.parentNode?.insertBefore(cs, select);
+            cs.appendChild(select);
+
+            select.classList.add('cs-native');
+            select.tabIndex = -1;
+
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'cs-btn';
+            btn.setAttribute('aria-haspopup', 'listbox');
+            btn.setAttribute('aria-expanded', 'false');
+            if (select.disabled) btn.disabled = true;
+
+            const value = document.createElement('span');
+            value.className = 'cs-value';
+
+            const caret = document.createElement('span');
+            caret.className = 'cs-caret';
+            caret.setAttribute('aria-hidden', 'true');
+
+            btn.appendChild(value);
+            btn.appendChild(caret);
+
+            const menu = document.createElement('div');
+            menu.className = 'cs-menu';
+            menu.setAttribute('role', 'listbox');
+
+            const menuId = `cs-${Math.random().toString(36).slice(2)}`;
+            menu.id = menuId;
+            btn.setAttribute('aria-controls', menuId);
+
+            function addOption(opt) {
+                const o = document.createElement('button');
+                o.type = 'button';
+                o.className = 'cs-opt';
+                o.textContent = opt.textContent || '';
+                o.dataset.value = opt.value;
+                o.disabled = !!opt.disabled;
+                o.setAttribute('role', 'option');
+                o.setAttribute('aria-selected', opt.selected ? 'true' : 'false');
+                menu.appendChild(o);
+            }
+
+            function buildMenu() {
+                menu.innerHTML = '';
+                const children = Array.from(select.children);
+                children.forEach(child => {
+                    if (child.tagName === 'OPTGROUP') {
+                        const g = document.createElement('div');
+                        g.className = 'cs-group';
+                        g.textContent = child.label || '';
+                        menu.appendChild(g);
+                        Array.from(child.children).forEach(opt => addOption(opt));
+                        return;
+                    }
+                    if (child.tagName === 'OPTION') addOption(child);
+                });
+            }
+
+            function syncFromSelect() {
+                const opt = select.selectedOptions?.[0] || select.options?.[select.selectedIndex];
+                const text = opt ? (opt.textContent || '') : '';
+                value.textContent = text;
+
+                const isPlaceholder = !!opt && (opt.disabled || opt.value === '');
+                btn.classList.toggle('is-placeholder', isPlaceholder);
+
+                menu.querySelectorAll('.cs-opt').forEach(o => {
+                    o.setAttribute('aria-selected', o.dataset.value === select.value ? 'true' : 'false');
+                });
+
+                if (select.disabled) btn.disabled = true;
+                cs.classList.remove('error');
+                select.classList.remove('error');
+            }
+
+            buildMenu();
+            cs.appendChild(btn);
+            cs.appendChild(menu);
+            syncFromSelect();
+
+            select.addEventListener('change', syncFromSelect);
+
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                toggle(cs);
+                if (cs.classList.contains('open')) focusSelected(menu);
+            });
+
+            btn.addEventListener('keydown', (e) => {
+                if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    open(cs);
+                    focusSelected(menu);
+                } else if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    open(cs);
+                    focusSelected(menu, true);
+                } else if (e.key === 'Escape') {
+                    close(cs);
+                }
+            });
+
+            menu.addEventListener('click', (e) => {
+                const optBtn = e.target.closest('.cs-opt');
+                if (!optBtn || optBtn.disabled) return;
+                select.value = optBtn.dataset.value;
+                select.dispatchEvent(new Event('change', { bubbles: true }));
+                close(cs);
+                btn.focus();
+            });
+
+            menu.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') {
+                    e.preventDefault();
+                    close(cs);
+                    btn.focus();
+                } else if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    moveFocus(menu, 1);
+                } else if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    moveFocus(menu, -1);
+                } else if (e.key === 'Enter' || e.key === ' ') {
+                    const active = document.activeElement;
+                    if (active?.classList?.contains('cs-opt')) {
+                        e.preventDefault();
+                        active.click();
+                    }
+                }
+            });
+        }
+
+        document.querySelectorAll('select.form-control, .search-field select').forEach(enhanceSelect);
+
+        document.addEventListener('click', (e) => {
+            Array.from(openSet).forEach(cs => {
+                if (!cs.contains(e.target)) close(cs);
+            });
+        });
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') Array.from(openSet).forEach(close);
+        });
+    })();
+
     // ── Auto-close Flash ──
     document.querySelectorAll('.flash').forEach(flash => {
         setTimeout(() => {
@@ -147,9 +356,11 @@ document.addEventListener('DOMContentLoaded', function () {
             this.querySelectorAll('[required]').forEach(field => {
                 if (!field.value.trim()) {
                     field.classList.add('error');
+                    if (field.matches('select.cs-native')) field.closest('.cs')?.classList.add('error');
                     valid = false;
                 } else {
                     field.classList.remove('error');
+                    if (field.matches('select.cs-native')) field.closest('.cs')?.classList.remove('error');
                 }
             });
             if (!valid) {
