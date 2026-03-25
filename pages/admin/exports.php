@@ -68,22 +68,23 @@ if ($download !== '') {
 require_once __DIR__ . '/../../includes/header.php';
 ?>
 
-<div class="page-header">
-  <div class="container">
-    <h1 class="page-title">Exports</h1>
-    <nav class="page-breadcrumb">
-      <a href="dashboard.php">Admin</a>
-      <i class="fas fa-chevron-right" style="font-size:.7rem"></i>
-      <span>Exports</span>
-    </nav>
-  </div>
-</div>
+<div class="dash-shell">
+  <?php adminSidebar('exports'); ?>
+  <div class="dash-main">
+    <?php adminTopbar(); ?>
+    <div class="dash-content">
+      <div class="dash-heading">
+        <div>
+          <h1 class="dash-title">Exports</h1>
+          <div class="dash-breadcrumb">
+            <a href="dashboard.php">Admin</a>
+            <i class="fas fa-chevron-right" style="font-size:.7rem"></i>
+            <span>Exports</span>
+          </div>
+        </div>
+      </div>
 
-<div class="container" style="padding-bottom:60px">
-  <div class="dashboard-layout">
-    <?php adminSidebar('exports'); ?>
-
-    <main>
+      <main>
       <div class="card">
         <div class="card-header">
           <h2 style="margin:0;font-family:var(--font-display);font-size:1.2rem;font-weight:800">Data Backup (CSV)</h2>
@@ -102,9 +103,11 @@ require_once __DIR__ . '/../../includes/header.php';
         </div>
       </div>
     </main>
+    </div>
   </div>
 </div>
 
 <?php require_once __DIR__ . '/../../includes/footer.php'; ?>
+
 
 

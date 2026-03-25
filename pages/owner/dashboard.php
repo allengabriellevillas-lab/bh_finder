@@ -6,6 +6,42 @@ $db = getDB();
 $user = getCurrentUser();
 $pageTitle = 'Owner Dashboard';
 
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $action = trim((string)($_POST['action'] ?? ''));
+    $id = intval($_POST['id'] ?? 0);
+
+    if ($action === 'delete' && $id > 0) {
+        try {
+            // Collect uploaded image filenames first so we can remove files after DB delete.
+            $imgStmt = $db->prepare("SELECT pi.image_path
+              FROM boarding_house_images pi
+              JOIN boarding_houses bh ON bh.id = pi.boarding_house_id
+              WHERE pi.boarding_house_id = ? AND bh.owner_id = ?");
+            $imgStmt->execute([$id, intval($_SESSION['user_id'])]);
+            $images = $imgStmt->fetchAll() ?: [];
+
+            $delStmt = $db->prepare("DELETE FROM boarding_houses WHERE id = ? AND owner_id = ?");
+            $delStmt->execute([$id, intval($_SESSION['user_id'])]);
+
+            if (intval($delStmt->rowCount()) <= 0) {
+                setFlash('error', 'Listing not found or you do not have permission to delete it.');
+            } else {
+                foreach ($images as $img) {
+                    $path = (string)($img['image_path'] ?? '');
+                    if ($path !== '') deleteUploadedFile($path);
+                }
+                setFlash('success', 'Listing deleted.');
+            }
+        } catch (Throwable $e) {
+            setFlash('error', 'Failed to delete listing. Please try again.');
+        }
+    } else {
+        setFlash('error', 'Invalid request.');
+    }
+
+    header('Location: dashboard.php');
+    exit;
+}
 // Stats
 $statsStmt = $db->prepare("SELECT
     COUNT(*) AS total,
@@ -61,37 +97,76 @@ $showNavbar = false;
 require_once __DIR__ . '/../../includes/header.php';
 ?>
 
-<div class="page-header">
-  <div class="container">
-    <h1 class="page-title">Owner Dashboard</h1>
-    <nav class="page-breadcrumb">
-      <a href="<?= SITE_URL ?>/index.php">Home</a>
-      <i class="fas fa-chevron-right" style="font-size:.7rem"></i>
-      <span>Dashboard</span>
+<div class="dash-shell">
+  <aside class="dash-sidebar">
+    <a class="dash-brand" href="dashboard.php" aria-label="<?= sanitize(SITE_NAME) ?>">
+      <span class="dash-logo-wrap"><img class="dash-logo" src="<?= SITE_URL ?>/bh_finder-logo.png" alt="<?= sanitize(SITE_NAME) ?> logo"></span>
+      <span class="sr-only"><?= sanitize(SITE_NAME) ?></span>
+    </a>
+
+    <a class="dash-action" href="add_listing.php" title="Create a new listing">
+      <span>Add Listing</span>
+      <i class="fas fa-plus"></i>
+    </a>
+
+    <nav class="dash-nav">
+      <a class="active" href="dashboard.php"><i class="fas fa-gauge"></i> Overview</a>
+      <a href="add_listing.php"><i class="fas fa-plus"></i> Add Listing</a>
+      <a href="inquiries.php"><i class="fas fa-envelope"></i> Inquiries <?php if ($unreadMessageCount > 0): ?><span class="sidebar-badge"><?= $unreadMessageCount ?></span><?php endif; ?></a>
+      <a href="<?= SITE_URL ?>/index.php"><i class="fas fa-house"></i> Browse</a>
     </nav>
-  </div>
-</div>
 
-<div class="container">
-  <div class="dashboard-layout">
-
-    <aside class="sidebar">
-      <div class="sidebar-user">
-        <div class="sidebar-avatar"><?= strtoupper(substr(sanitize($user['full_name'] ?? 'U'), 0, 1)) ?></div>
-        <div class="sidebar-name"><?= sanitize($user['full_name'] ?? 'Owner') ?></div>
-        <div class="sidebar-email"><?= sanitize($user['email'] ?? '') ?></div>
+    <div class="dash-sidebar-footer">
+      <div class="dash-me">
+        <div class="dash-avatar"><?= strtoupper(substr(sanitize($user['full_name'] ?? 'U'), 0, 1)) ?></div>
+        <div>
+          <strong style="display:block;font-size:.92rem"><?= sanitize($user['full_name'] ?? 'Owner') ?></strong>
+          <small><?= sanitize($user['email'] ?? '') ?></small>
+        </div>
       </div>
 
-      <nav class="sidebar-nav">
-        <a class="active" href="dashboard.php"><i class="fas fa-gauge"></i> Dashboard</a>
-        <a href="add_listing.php"><i class="fas fa-plus"></i> Add Listing</a>
-        <a href="inquiries.php"><i class="fas fa-envelope"></i> Inquiries <?php if ($unreadMessageCount > 0): ?><span class="sidebar-badge"><?= $unreadMessageCount ?></span><?php endif; ?></a>
-        <a href="<?= SITE_URL ?>/index.php"><i class="fas fa-house"></i> Browse</a>
-        <a href="<?= SITE_URL ?>/logout.php" class="logout-link"><i class="fas fa-right-from-bracket"></i> Logout</a>
-      </nav>
-    </aside>
+      <div class="dash-nav" style="margin-top:6px">
+        <a href="<?= SITE_URL ?>/logout.php"><i class="fas fa-right-from-bracket"></i> Logout</a>
+      </div>
+    </div>
+  </aside>
 
-    <main>
+  <div class="dash-main">
+    <div class="dash-topbar">
+      <div class="dash-search" aria-label="Search">
+        <i class="fas fa-magnifying-glass"></i>
+        <input type="search" placeholder="Search...">
+      </div>
+
+      <div class="dash-top-actions">
+        <button class="dash-icon-btn" type="button" title="Notifications" aria-label="Notifications">
+          <i class="far fa-bell"></i>
+        </button>
+
+        <div class="dash-user" aria-label="Account">
+          <div class="dash-avatar"><?= strtoupper(substr(sanitize($user['full_name'] ?? 'U'), 0, 1)) ?></div>
+          <div class="dash-user-meta">
+            <strong><?= sanitize($user['full_name'] ?? 'Owner') ?></strong>
+            <span>Owner</span>
+          </div>
+          <i class="fas fa-chevron-down" style="font-size:.75rem;color:#9CA3AF"></i>
+        </div>
+      </div>
+    </div>
+
+    <div class="dash-content">
+      <div class="dash-heading">
+        <div>
+          <h1 class="dash-title">Owner Dashboard</h1>
+          <div class="dash-breadcrumb">
+            <a href="<?= SITE_URL ?>/index.php">Home</a>
+            <i class="fas fa-chevron-right" style="font-size:.7rem"></i>
+            <span>Owner</span>
+          </div>
+        </div>
+      </div>
+
+      <main>
       <div class="stats-grid">
         <div class="stat-card">
           <div class="stat-icon stat-icon-primary"><i class="fas fa-building"></i></div>
@@ -207,7 +282,12 @@ require_once __DIR__ . '/../../includes/header.php';
                     <td>
                       <div class="flex flex-wrap gap-2">
                         <a class="btn btn-primary btn-sm" href="<?= SITE_URL ?>/pages/detail.php?id=<?= intval($l['id'] ?? 0) ?>"><i class="fas fa-eye"></i> View</a>
-                        <a class="btn btn-ghost btn-sm" href="edit_listing.php?id=<?= intval($l['id'] ?? 0) ?>"><i class="fas fa-pen"></i> Edit</a>
+                                                <a class="btn btn-ghost btn-sm" href="edit_listing.php?id=<?= intval($l['id'] ?? 0) ?>"><i class="fas fa-pen"></i> Edit</a>
+                        <form method="POST" action="dashboard.php" style="display:inline" onsubmit="return confirm('Delete this listing? This cannot be undone.');">
+                          <input type="hidden" name="action" value="delete">
+                          <input type="hidden" name="id" value="<?= intval($l['id'] ?? 0) ?>">
+                          <button type="submit" class="btn btn-danger btn-sm"><i class="fas fa-trash"></i> Delete</button>
+                        </form>
                       </div>
                     </td>
                   </tr>
@@ -225,10 +305,25 @@ require_once __DIR__ . '/../../includes/header.php';
         </div>
       </div>
     </main>
+    </div>
 
   </div>
 </div>
 
 <?php require_once __DIR__ . '/../../includes/footer.php'; ?>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 

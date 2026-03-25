@@ -69,20 +69,80 @@ $showNavbar = false;
 require_once __DIR__ . '/../../includes/header.php';
 ?>
 
-<div class="page-header">
-  <div class="container">
-    <h1 class="page-title">Inquiry</h1>
-    <nav class="page-breadcrumb">
-      <a href="dashboard.php">Dashboard</a>
-      <i class="fas fa-chevron-right" style="font-size:.7rem"></i>
-      <a href="inquiries.php">Inquiries</a>
-      <i class="fas fa-chevron-right" style="font-size:.7rem"></i>
-      <span>#<?= intval($id) ?></span>
-    </nav>
-  </div>
-</div>
+<?php $me = getCurrentUser(); ?>
+<div class="dash-shell">
+  <aside class="dash-sidebar">
+    <a class="dash-brand" href="dashboard.php" aria-label="<?= sanitize(SITE_NAME) ?>">
+      <span class="dash-logo-wrap"><img class="dash-logo" src="<?= SITE_URL ?>/bh_finder-logo.png" alt="<?= sanitize(SITE_NAME) ?> logo"></span>
+      <span class="sr-only"><?= sanitize(SITE_NAME) ?></span>
+    </a>
 
-<div class="container" style="max-width:980px;padding-bottom:60px">
+    <a class="dash-action" href="add_listing.php" title="Create a new listing">
+      <span>Add Listing</span>
+      <i class="fas fa-plus"></i>
+    </a>
+
+    <nav class="dash-nav">
+      <a href="dashboard.php"><i class="fas fa-gauge"></i> Overview</a>
+      <a href="add_listing.php"><i class="fas fa-plus"></i> Add Listing</a>
+      <a class="active" href="inquiries.php"><i class="fas fa-envelope"></i> Inquiries</a>
+      <a href="<?= SITE_URL ?>/index.php"><i class="fas fa-house"></i> Browse</a>
+    </nav>
+
+    <div class="dash-sidebar-footer">
+      <div class="dash-me">
+        <div class="dash-avatar"><?= strtoupper(substr(sanitize($me['full_name'] ?? 'U'), 0, 1)) ?></div>
+        <div>
+          <strong style="display:block;font-size:.92rem"><?= sanitize($me['full_name'] ?? 'Owner') ?></strong>
+          <small><?= sanitize($me['email'] ?? '') ?></small>
+        </div>
+      </div>
+
+      <div class="dash-nav" style="margin-top:6px">
+        <a href="<?= SITE_URL ?>/logout.php"><i class="fas fa-right-from-bracket"></i> Logout</a>
+      </div>
+    </div>
+  </aside>
+
+  <div class="dash-main">
+    <div class="dash-topbar">
+      <div class="dash-search" aria-label="Search">
+        <i class="fas fa-magnifying-glass"></i>
+        <input type="search" placeholder="Search...">
+      </div>
+
+      <div class="dash-top-actions">
+        <button class="dash-icon-btn" type="button" title="Notifications" aria-label="Notifications">
+          <i class="far fa-bell"></i>
+        </button>
+
+        <div class="dash-user" aria-label="Account">
+          <div class="dash-avatar"><?= strtoupper(substr(sanitize($me['full_name'] ?? 'U'), 0, 1)) ?></div>
+          <div class="dash-user-meta">
+            <strong><?= sanitize($me['full_name'] ?? 'Owner') ?></strong>
+            <span>Owner</span>
+          </div>
+          <i class="fas fa-chevron-down" style="font-size:.75rem;color:#9CA3AF"></i>
+        </div>
+      </div>
+    </div>
+
+    <div class="dash-content">
+      <div class="dash-heading">
+        <div>
+          <h1 class="dash-title">Inquiry</h1>
+          <div class="dash-breadcrumb">
+            <a href="dashboard.php">Dashboard</a>
+            <i class="fas fa-chevron-right" style="font-size:.7rem"></i>
+            <a href="inquiries.php">Inquiries</a>
+            <i class="fas fa-chevron-right" style="font-size:.7rem"></i>
+            <span>#<?= intval($id) ?></span>
+          </div>
+        </div>
+      </div>
+
+      <main>
+        <div style="max-width:980px;margin:0 auto">
   <?php if ($saveOk): ?>
     <div class="flash flash-success" style="margin-bottom:16px"><i class="fas fa-check-circle"></i> Saved.</div>
   <?php endif; ?>
@@ -159,6 +219,21 @@ require_once __DIR__ . '/../../includes/header.php';
     </div>
   </div>
 </div>
+        </div>
+      </main>
+    </div>
+  </div>
+</div>
 
 <?php require_once __DIR__ . '/../../includes/footer.php'; ?>
+
+
+
+
+
+
+
+
+
+
 

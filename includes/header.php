@@ -15,7 +15,7 @@ $showNavbar = $showNavbar ?? true;
   <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
 </head>
-<body class="<?= $showNavbar ? 'has-navbar' : 'no-navbar' ?>">
+<body class="<?= $showNavbar ? 'has-navbar' : 'no-navbar' ?>"><div class="page-root">
 <?php if ($flash): ?>
   <div class="flash-container">
     <div class="flash flash-<?= sanitize($flash['type']) ?>">
@@ -35,9 +35,11 @@ $showNavbar = $showNavbar ?? true;
   <?php if ($showNavbar): ?>
     <nav class="navbar">
       <div class="container navbar-inner">
-        <a class="brand" href="<?= SITE_URL ?>/index.php">
-          <span class="brand-icon"><i class="fas fa-home"></i></span>
-          <span><?= sanitize(SITE_NAME) ?></span>
+        <a class="brand" href="<?= SITE_URL ?>/index.php" aria-label="<?= sanitize(SITE_NAME) ?>">
+          <span class="brand-icon">
+            <img class="site-logo nav-logo" src="<?= SITE_URL ?>/bh_finder-logo.png" alt="<?= sanitize(SITE_NAME) ?> logo">
+          </span>
+          <span class="sr-only"><?= sanitize(SITE_NAME) ?></span>
         </a>
 
         <button class="nav-toggle" id="navToggle" type="button" aria-label="Toggle navigation">
@@ -85,6 +87,11 @@ $showNavbar = $showNavbar ?? true;
       </div>
     </nav>
   <?php endif; ?>
+
+
+
+
+
 
 
 

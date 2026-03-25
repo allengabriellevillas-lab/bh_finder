@@ -56,27 +56,71 @@ function adminSidebar(string $active): void {
 
     $me = getCurrentUser();
     ?>
-    <aside class="sidebar">
-        <div class="sidebar-user">
-            <div class="sidebar-avatar"><?= strtoupper(substr(sanitize($me['full_name'] ?? 'A'), 0, 1)) ?></div>
-            <div class="sidebar-name"><?= sanitize($me['full_name'] ?? 'Admin') ?></div>
-            <div class="sidebar-email"><?= sanitize($me['email'] ?? '') ?></div>
-            <div class="role-badge role-admin" style="margin-top:10px;display:inline-flex">admin</div>
-        </div>
+    <aside class="dash-sidebar">
+        <a class="dash-brand" href="dashboard.php" aria-label="<?= sanitize(SITE_NAME) ?>">
+            <span class="dash-logo-wrap"><img class="dash-logo" src="<?= SITE_URL ?>/bh_finder-logo.png" alt="<?= sanitize(SITE_NAME) ?> logo"></span>
+            <span class="sr-only"><?= sanitize(SITE_NAME) ?></span>
+        </a>
 
-        <nav class="sidebar-nav">
+        <a class="dash-action" href="content.php" title="Manage announcements and pages">
+            <span>Manage Content</span>
+            <i class="fas fa-plus"></i>
+        </a>
+
+        <nav class="dash-nav">
             <?php foreach ($items as $it): ?>
                 <a class="<?= $active === $it['k'] ? 'active' : '' ?>" href="<?= sanitize($it['href']) ?>">
                     <i class="fas <?= sanitize($it['icon']) ?>"></i> <?= sanitize($it['label']) ?>
                 </a>
             <?php endforeach; ?>
-            <hr style="border:none;border-top:1px solid var(--border);margin:10px 0">
-            <a href="<?= SITE_URL ?>/index.php"><i class="fas fa-house"></i> Back to site</a>
-            <a href="<?= SITE_URL ?>/logout.php" class="logout-link"><i class="fas fa-right-from-bracket"></i> Logout</a>
         </nav>
+
+        <div class="dash-sidebar-footer">
+            <div class="dash-me">
+                <div class="dash-avatar"><?= strtoupper(substr(sanitize($me['full_name'] ?? 'A'), 0, 1)) ?></div>
+                <div>
+                    <strong style="display:block;font-size:.92rem"><?= sanitize($me['full_name'] ?? 'Admin') ?></strong>
+                    <small><?= sanitize($me['email'] ?? '') ?></small>
+                </div>
+            </div>
+
+            <div class="dash-nav" style="margin-top:6px">
+                <a href="<?= SITE_URL ?>/index.php"><i class="fas fa-house"></i> Back to site</a>
+                <a href="<?= SITE_URL ?>/logout.php"><i class="fas fa-right-from-bracket"></i> Logout</a>
+            </div>
+        </div>
     </aside>
     <?php
 }
+
+function adminTopbar(): void {
+    $me = getCurrentUser();
+    ?>
+    <div class="dash-topbar">
+        <div class="dash-search" aria-label="Search">
+            <i class="fas fa-magnifying-glass"></i>
+            <input type="search" placeholder="Search...">
+        </div>
+
+        <div class="dash-top-actions">
+            <button class="dash-icon-btn" type="button" title="Notifications" aria-label="Notifications">
+                <i class="far fa-bell"></i>
+            </button>
+
+            <div class="dash-user" aria-label="Account">
+                <div class="dash-avatar"><?= strtoupper(substr(sanitize($me['full_name'] ?? 'A'), 0, 1)) ?></div>
+                <div class="dash-user-meta">
+                    <strong><?= sanitize($me['full_name'] ?? 'Admin') ?></strong>
+                    <span>Admin</span>
+                </div>
+                <i class="fas fa-chevron-down" style="font-size:.75rem;color:#9CA3AF"></i>
+            </div>
+        </div>
+    </div>
+    <?php
+}
+
+
 
 
 

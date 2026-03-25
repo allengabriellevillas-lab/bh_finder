@@ -1,3 +1,4 @@
-﻿  <script src="<?= SITE_URL ?>/main.js"></script>
+﻿  </div>
+  <script src="<?= SITE_URL ?>/main.js"></script>
 </body>
 </html>

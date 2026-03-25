@@ -40,22 +40,23 @@ if ($hasViews) {
 require_once __DIR__ . '/../../includes/header.php';
 ?>
 
-<div class="page-header">
-  <div class="container">
-    <h1 class="page-title">Admin Dashboard</h1>
-    <nav class="page-breadcrumb">
-      <a href="<?= SITE_URL ?>/index.php">Home</a>
-      <i class="fas fa-chevron-right" style="font-size:.7rem"></i>
-      <span>Admin</span>
-    </nav>
-  </div>
-</div>
+<div class="dash-shell">
+  <?php adminSidebar('dashboard'); ?>
+  <div class="dash-main">
+    <?php adminTopbar(); ?>
+    <div class="dash-content">
+      <div class="dash-heading">
+        <div>
+          <h1 class="dash-title">Admin Dashboard</h1>
+          <div class="dash-breadcrumb">
+            <a href="<?= SITE_URL ?>/index.php">Home</a>
+            <i class="fas fa-chevron-right" style="font-size:.7rem"></i>
+            <span>Admin</span>
+          </div>
+        </div>
+      </div>
 
-<div class="container" style="padding-bottom:60px">
-  <div class="dashboard-layout">
-    <?php adminSidebar('dashboard'); ?>
-
-    <main>
+      <main>
       <div class="stats-grid">
         <div class="stat-card">
           <div class="stat-icon stat-icon-primary"><i class="fas fa-users"></i></div>
@@ -181,7 +182,11 @@ require_once __DIR__ . '/../../includes/header.php';
       </div>
       <?php endif; ?>
     </main>
+    </div>
   </div>
 </div>
 
 <?php require_once __DIR__ . '/../../includes/footer.php'; ?>
+
+
+

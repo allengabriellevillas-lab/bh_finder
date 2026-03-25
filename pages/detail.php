@@ -165,7 +165,7 @@ require_once __DIR__ . '/../includes/header.php';
           <?php endif; ?>
         </div>
       <?php else: ?>
-        <div style="height:300px;background:linear-gradient(135deg,#F0E8DC,#E0D4C4);border-radius:var(--radius-lg);display:flex;align-items:center;justify-content:center;flex-direction:column;color:var(--text-light);gap:12px;margin-bottom:24px">
+        <div style="height:300px;background:linear-gradient(135deg,rgba(var(--primary-rgb),0.14),rgba(var(--primary-rgb),0.04));border-radius:var(--radius-lg);display:flex;align-items:center;justify-content:center;flex-direction:column;color:var(--text-light);gap:12px;margin-bottom:24px">
           <i class="fas fa-building" style="font-size:4rem"></i>
           <span>No photos available</span>
         </div>
@@ -354,4 +354,5 @@ require_once __DIR__ . '/../includes/header.php';
 </div>
 
 <?php require_once __DIR__ . '/../includes/footer.php'; ?>
+
 

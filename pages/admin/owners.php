@@ -61,22 +61,23 @@ if ($hasOwnerVerified) {
 require_once __DIR__ . '/../../includes/header.php';
 ?>
 
-<div class="page-header">
-  <div class="container">
-    <h1 class="page-title">Owner Verification</h1>
-    <nav class="page-breadcrumb">
-      <a href="dashboard.php">Admin</a>
-      <i class="fas fa-chevron-right" style="font-size:.7rem"></i>
-      <span>Owners</span>
-    </nav>
-  </div>
-</div>
+<div class="dash-shell">
+  <?php adminSidebar('owners'); ?>
+  <div class="dash-main">
+    <?php adminTopbar(); ?>
+    <div class="dash-content">
+      <div class="dash-heading">
+        <div>
+          <h1 class="dash-title">Owner Verification</h1>
+          <div class="dash-breadcrumb">
+            <a href="dashboard.php">Admin</a>
+            <i class="fas fa-chevron-right" style="font-size:.7rem"></i>
+            <span>Owners</span>
+          </div>
+        </div>
+      </div>
 
-<div class="container" style="padding-bottom:60px">
-  <div class="dashboard-layout">
-    <?php adminSidebar('owners'); ?>
-
-    <main>
+      <main>
       <div class="stats-grid" style="grid-template-columns:repeat(auto-fill,minmax(220px,1fr))">
         <div class="stat-card">
           <div class="stat-icon stat-icon-primary"><i class="fas fa-user-tie"></i></div>
@@ -191,7 +192,9 @@ require_once __DIR__ . '/../../includes/header.php';
         </div>
       </div>
     </main>
+    </div>
   </div>
 </div>
 
 <?php require_once __DIR__ . '/../../includes/footer.php'; ?>
+

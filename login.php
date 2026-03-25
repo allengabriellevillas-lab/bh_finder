@@ -35,7 +35,9 @@ require_once __DIR__ . '/includes/header.php';
 <div class="auth-wrap">
   <div class="auth-card">
     <div class="auth-header">
-      <div class="auth-logo"><i class="fas fa-home"></i> <?= SITE_NAME ?></div>
+      <div class="auth-logo" aria-label="<?= sanitize(SITE_NAME) ?>">
+        <img class="auth-logo-wide" src="<?= SITE_URL ?>/login-reg-logo.png" alt="<?= sanitize(SITE_NAME) ?> logo">
+      </div>
       <h1 class="auth-title">Welcome Back</h1>
       <p class="auth-subtitle">Login to access your account</p>
     </div>
@@ -68,4 +70,9 @@ require_once __DIR__ . '/includes/header.php';
   </div>
 </div>
 <?php require_once __DIR__ . '/includes/footer.php'; ?>
+
+
+
+
+
 

@@ -59,22 +59,23 @@ $rows = $hasSettings ? ($db->query("SELECT * FROM settings ORDER BY `key` ASC")-
 require_once __DIR__ . '/../../includes/header.php';
 ?>
 
-<div class="page-header">
-  <div class="container">
-    <h1 class="page-title">Settings</h1>
-    <nav class="page-breadcrumb">
-      <a href="dashboard.php">Admin</a>
-      <i class="fas fa-chevron-right" style="font-size:.7rem"></i>
-      <span>Settings</span>
-    </nav>
-  </div>
-</div>
+<div class="dash-shell">
+  <?php adminSidebar('settings'); ?>
+  <div class="dash-main">
+    <?php adminTopbar(); ?>
+    <div class="dash-content">
+      <div class="dash-heading">
+        <div>
+          <h1 class="dash-title">Settings</h1>
+          <div class="dash-breadcrumb">
+            <a href="dashboard.php">Admin</a>
+            <i class="fas fa-chevron-right" style="font-size:.7rem"></i>
+            <span>Settings</span>
+          </div>
+        </div>
+      </div>
 
-<div class="container" style="padding-bottom:60px">
-  <div class="dashboard-layout">
-    <?php adminSidebar('settings'); ?>
-
-    <main>
+      <main>
       <div class="card">
         <div class="card-header" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
           <div>
@@ -142,7 +143,9 @@ require_once __DIR__ . '/../../includes/header.php';
         </div>
       </div>
     </main>
+    </div>
   </div>
 </div>
 
 <?php require_once __DIR__ . '/../../includes/footer.php'; ?>
+

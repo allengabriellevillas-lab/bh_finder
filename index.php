@@ -120,23 +120,6 @@ require_once __DIR__ . '/includes/header.php';
 
 
 <div class="main-content">
-  <?php if ($announcement): ?>
-    <section class="section" style="padding:22px 0 0 0">
-      <div class="container" style="max-width:980px">
-        <div class="card" style="border-left:6px solid var(--primary)">
-          <div class="card-body">
-            <div class="flex items-center gap-2" style="margin-bottom:8px;color:var(--secondary)">
-              <i class="fas fa-bullhorn"></i>
-              <strong><?= sanitize($announcement['title'] ?? 'Announcement') ?></strong>
-            </div>
-            <?php if (!empty($announcement['body'])): ?>
-              <div class="text-muted" style="white-space:pre-wrap;line-height:1.8"><?= sanitize($announcement['body']) ?></div>
-            <?php endif; ?>
-          </div>
-        </div>
-      </div>
-    </section>
-  <?php endif; ?>
   <section class="hero">
     <div class="container">
       <div class="hero-content">
@@ -184,6 +167,24 @@ require_once __DIR__ . '/includes/header.php';
     </div>
   </section>
 
+  <?php if ($announcement): ?>
+    <section class="section" style="padding:22px 0 0 0">
+      <div class="container" style="max-width:980px">
+        <div class="card" style="border-left:6px solid var(--primary)">
+          <div class="card-body">
+            <div class="flex items-center gap-2" style="margin-bottom:8px;color:var(--secondary)">
+              <i class="fas fa-bullhorn"></i>
+              <strong><?= sanitize($announcement['title'] ?? 'Announcement') ?></strong>
+            </div>
+            <?php if (!empty($announcement['body'])): ?>
+              <div class="text-muted" style="white-space:pre-wrap;line-height:1.8"><?= sanitize($announcement['body']) ?></div>
+            <?php endif; ?>
+          </div>
+        </div>
+      </div>
+    </section>
+  <?php endif; ?>
+ 
   <section class="section" id="listings">
     <div class="container">
       <div class="section-header">

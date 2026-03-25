@@ -114,22 +114,23 @@ $pages = $hasPages ? ($db->query("SELECT * FROM content_pages ORDER BY created_a
 require_once __DIR__ . '/../../includes/header.php';
 ?>
 
-<div class="page-header">
-  <div class="container">
-    <h1 class="page-title">Content</h1>
-    <nav class="page-breadcrumb">
-      <a href="dashboard.php">Admin</a>
-      <i class="fas fa-chevron-right" style="font-size:.7rem"></i>
-      <span>Content</span>
-    </nav>
-  </div>
-</div>
+<div class="dash-shell">
+  <?php adminSidebar('content'); ?>
+  <div class="dash-main">
+    <?php adminTopbar(); ?>
+    <div class="dash-content">
+      <div class="dash-heading">
+        <div>
+          <h1 class="dash-title">Content</h1>
+          <div class="dash-breadcrumb">
+            <a href="dashboard.php">Admin</a>
+            <i class="fas fa-chevron-right" style="font-size:.7rem"></i>
+            <span>Content</span>
+          </div>
+        </div>
+      </div>
 
-<div class="container" style="padding-bottom:60px">
-  <div class="dashboard-layout">
-    <?php adminSidebar('content'); ?>
-
-    <main>
+      <main>
       <div class="flex gap-2" style="margin-bottom:12px;flex-wrap:wrap">
         <a class="btn <?= $tab==='ann'?'btn-primary':'btn-ghost' ?> btn-sm" href="content.php?tab=ann"><i class="fas fa-bullhorn"></i> Announcements</a>
         <a class="btn <?= $tab==='pages'?'btn-primary':'btn-ghost' ?> btn-sm" href="content.php?tab=pages"><i class="fas fa-file-lines"></i> Pages (FAQ/Guidelines)</a>
@@ -289,7 +290,9 @@ require_once __DIR__ . '/../../includes/header.php';
         </div>
       <?php endif; ?>
     </main>
+    </div>
   </div>
 </div>
 
 <?php require_once __DIR__ . '/../../includes/footer.php'; ?>
+

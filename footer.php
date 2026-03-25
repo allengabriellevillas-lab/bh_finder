@@ -6,8 +6,10 @@
         <div class="footer-grid">
             <div class="footer-brand">
                 <a href="<?= SITE_URL ?>/index.php" class="brand">
-                    <span class="brand-icon"><i class="fas fa-home"></i></span>
-                    <span class="brand-text"><?= SITE_NAME ?></span>
+                    <span class="brand-icon">
+                        <img class="footer-logo" src="<?= SITE_URL ?>/bh_finder-logo.png" alt="<?= sanitize(SITE_NAME) ?> logo">
+                    </span>
+                    <span class="sr-only"><?= SITE_NAME ?></span>
                 </a>
                 <p>Find your perfect boarding house with ease. Connecting tenants and property owners across the Philippines.</p>
             </div>

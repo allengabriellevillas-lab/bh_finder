@@ -86,47 +86,50 @@ $rows = $stmt->fetchAll() ?: [];
 require_once __DIR__ . '/../../includes/header.php';
 ?>
 
-<div class="page-header">
-  <div class="container">
-    <h1 class="page-title">Listings</h1>
-    <nav class="page-breadcrumb">
-      <a href="dashboard.php">Admin</a>
-      <i class="fas fa-chevron-right" style="font-size:.7rem"></i>
-      <span>Listings</span>
-    </nav>
-  </div>
-</div>
+<div class="dash-shell">
+  <?php adminSidebar('listings'); ?>
+  <div class="dash-main">
+    <?php adminTopbar(); ?>
+    <div class="dash-content">
+      <div class="dash-heading">
+        <div>
+          <h1 class="dash-title">Listings</h1>
+          <div class="dash-breadcrumb">
+            <a href="dashboard.php">Admin</a>
+            <i class="fas fa-chevron-right" style="font-size:.7rem"></i>
+            <span>Listings</span>
+          </div>
+        </div>
+      </div>
 
-<div class="container" style="padding-bottom:60px">
-  <div class="dashboard-layout">
-    <?php adminSidebar('listings'); ?>
-
-    <main>
+      <main>
       <div class="card">
-        <div class="card-header" style="display:flex;align-items:flex-end;justify-content:space-between;gap:12px;flex-wrap:wrap">
+        <div class="card-header" style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap">
           <div>
             <h2 style="margin:0;font-family:var(--font-display);font-size:1.2rem;font-weight:800">Moderate Listings</h2>
             <div class="text-muted text-sm" style="margin-top:4px"><?= number_format(count($rows)) ?> result(s).</div>
           </div>
 
-          <form method="GET" action="" class="flex items-center gap-2" style="flex-wrap:wrap">
-            <input class="form-control" type="text" name="q" placeholder="Search listings/owner" value="<?= sanitize($search) ?>" style="min-width:220px">
-            <select name="status" class="form-control" style="min-width:160px">
+          <form method="GET" action="" class="card-filters">
+            <input class="form-control" type="text" name="q" placeholder="Search listings/owner" value="<?= sanitize($search) ?>">
+            <select name="status" class="form-control">
               <option value="">All status</option>
               <option value="active" <?= $statusFilter==='active'?'selected':'' ?>>Active</option>
               <option value="full" <?= $statusFilter==='full'?'selected':'' ?>>Full</option>
               <option value="inactive" <?= $statusFilter==='inactive'?'selected':'' ?>>Inactive</option>
             </select>
             <?php if ($hasApproval): ?>
-              <select name="approval" class="form-control" style="min-width:180px">
+              <select name="approval" class="form-control">
                 <option value="">All approvals</option>
                 <option value="pending" <?= $approvalFilter==='pending'?'selected':'' ?>>Pending</option>
                 <option value="approved" <?= $approvalFilter==='approved'?'selected':'' ?>>Approved</option>
                 <option value="rejected" <?= $approvalFilter==='rejected'?'selected':'' ?>>Rejected</option>
               </select>
             <?php endif; ?>
-            <button class="btn btn-ghost btn-sm" type="submit"><i class="fas fa-filter"></i> Filter</button>
-            <a class="btn btn-ghost btn-sm" href="listings.php"><i class="fas fa-rotate-left"></i> Reset</a>
+            <div class="filter-row">
+              <button class="btn btn-ghost btn-sm" type="submit"><i class="fas fa-filter"></i> Filter</button>
+              <a class="btn btn-ghost btn-sm" href="listings.php"><i class="fas fa-rotate-left"></i> Reset</a>
+            </div>
           </form>
         </div>
 
@@ -227,7 +230,10 @@ require_once __DIR__ . '/../../includes/header.php';
         </div>
       </div>
     </main>
+    </div>
   </div>
 </div>
 
 <?php require_once __DIR__ . '/../../includes/footer.php'; ?>
+
+

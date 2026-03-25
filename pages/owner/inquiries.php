@@ -52,40 +52,79 @@ $showNavbar = false;
 require_once __DIR__ . '/../../includes/header.php';
 ?>
 
-<div class="page-header">
-  <div class="container">
-    <h1 class="page-title">Inquiries</h1>
-    <nav class="page-breadcrumb">
-      <a href="dashboard.php">Dashboard</a>
-      <i class="fas fa-chevron-right" style="font-size:.7rem"></i>
-      <span>Inquiries</span>
+<?php $me = getCurrentUser(); ?>
+<div class="dash-shell">
+  <aside class="dash-sidebar">
+    <a class="dash-brand" href="dashboard.php" aria-label="<?= sanitize(SITE_NAME) ?>">
+      <span class="dash-logo-wrap"><img class="dash-logo" src="<?= SITE_URL ?>/bh_finder-logo.png" alt="<?= sanitize(SITE_NAME) ?> logo"></span>
+      <span class="sr-only"><?= sanitize(SITE_NAME) ?></span>
+    </a>
+
+    <a class="dash-action" href="add_listing.php" title="Create a new listing">
+      <span>Add Listing</span>
+      <i class="fas fa-plus"></i>
+    </a>
+
+    <nav class="dash-nav">
+      <a href="dashboard.php"><i class="fas fa-gauge"></i> Overview</a>
+      <a href="add_listing.php"><i class="fas fa-plus"></i> Add Listing</a>
+      <a class="active" href="inquiries.php"><i class="fas fa-envelope"></i> Inquiries <?php if ($unreadCount > 0): ?><span class="sidebar-badge"><?= $unreadCount ?></span><?php endif; ?></a>
+      <a href="<?= SITE_URL ?>/index.php"><i class="fas fa-house"></i> Browse</a>
     </nav>
-  </div>
-</div>
 
-<div class="container" style="padding-bottom:60px">
-  <div class="dashboard-layout">
-
-    <aside class="sidebar">
-      <?php $me = getCurrentUser(); ?>
-      <div class="sidebar-user">
-        <div class="sidebar-avatar"><?= strtoupper(substr(sanitize($me['full_name'] ?? 'U'), 0, 1)) ?></div>
-        <div class="sidebar-name"><?= sanitize($me['full_name'] ?? 'Owner') ?></div>
-        <div class="sidebar-email"><?= sanitize($me['email'] ?? '') ?></div>
+    <div class="dash-sidebar-footer">
+      <div class="dash-me">
+        <div class="dash-avatar"><?= strtoupper(substr(sanitize($me['full_name'] ?? 'U'), 0, 1)) ?></div>
+        <div>
+          <strong style="display:block;font-size:.92rem"><?= sanitize($me['full_name'] ?? 'Owner') ?></strong>
+          <small><?= sanitize($me['email'] ?? '') ?></small>
+        </div>
       </div>
 
-      <nav class="sidebar-nav">
-        <a href="dashboard.php"><i class="fas fa-gauge"></i> Dashboard</a>
-        <a href="add_listing.php"><i class="fas fa-plus"></i> Add Listing</a>
-        <a class="active" href="inquiries.php"><i class="fas fa-envelope"></i> Inquiries <?php if ($unreadCount > 0): ?><span class="sidebar-badge"><?= $unreadCount ?></span><?php endif; ?></a>
-        <a href="<?= SITE_URL ?>/index.php"><i class="fas fa-house"></i> Browse</a>
-        <a href="<?= SITE_URL ?>/logout.php" class="logout-link"><i class="fas fa-right-from-bracket"></i> Logout</a>
-      </nav>
-    </aside>
+      <div class="dash-nav" style="margin-top:6px">
+        <a href="<?= SITE_URL ?>/logout.php"><i class="fas fa-right-from-bracket"></i> Logout</a>
+      </div>
+    </div>
+  </aside>
 
-    <main>
+  <div class="dash-main">
+    <div class="dash-topbar">
+      <div class="dash-search" aria-label="Search">
+        <i class="fas fa-magnifying-glass"></i>
+        <input type="search" placeholder="Search...">
+      </div>
+
+      <div class="dash-top-actions">
+        <button class="dash-icon-btn" type="button" title="Notifications" aria-label="Notifications">
+          <i class="far fa-bell"></i>
+        </button>
+
+        <div class="dash-user" aria-label="Account">
+          <div class="dash-avatar"><?= strtoupper(substr(sanitize($me['full_name'] ?? 'U'), 0, 1)) ?></div>
+          <div class="dash-user-meta">
+            <strong><?= sanitize($me['full_name'] ?? 'Owner') ?></strong>
+            <span>Owner</span>
+          </div>
+          <i class="fas fa-chevron-down" style="font-size:.75rem;color:#9CA3AF"></i>
+        </div>
+      </div>
+    </div>
+
+    <div class="dash-content">
+      <div class="dash-heading">
+        <div>
+          <h1 class="dash-title">Inquiries</h1>
+          <div class="dash-breadcrumb">
+            <a href="dashboard.php">Dashboard</a>
+            <i class="fas fa-chevron-right" style="font-size:.7rem"></i>
+            <span>Inquiries</span>
+          </div>
+        </div>
+      </div>
+
+      <main>
       <div class="card">
-        <div class="card-header" style="display:flex;align-items:flex-end;justify-content:space-between;gap:12px;flex-wrap:wrap">
+        <div class="card-header" style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap">
           <div>
             <h2 style="margin:0;font-family:var(--font-display);font-size:1.2rem;font-weight:800">Messages</h2>
             <div class="text-muted text-sm" style="margin-top:4px">Tenant inquiries sent from listing pages.</div>
@@ -170,9 +209,20 @@ require_once __DIR__ . '/../../includes/header.php';
         </div>
       </div>
     </main>
+    </div>
 
   </div>
 </div>
 
 <?php require_once __DIR__ . '/../../includes/footer.php'; ?>
+
+
+
+
+
+
+
+
+
+
 

@@ -56,38 +56,41 @@ if ($hasReports) {
 require_once __DIR__ . '/../../includes/header.php';
 ?>
 
-<div class="page-header">
-  <div class="container">
-    <h1 class="page-title">Reports</h1>
-    <nav class="page-breadcrumb">
-      <a href="dashboard.php">Admin</a>
-      <i class="fas fa-chevron-right" style="font-size:.7rem"></i>
-      <span>Reports</span>
-    </nav>
-  </div>
-</div>
+<div class="dash-shell">
+  <?php adminSidebar('reports'); ?>
+  <div class="dash-main">
+    <?php adminTopbar(); ?>
+    <div class="dash-content">
+      <div class="dash-heading">
+        <div>
+          <h1 class="dash-title">Reports</h1>
+          <div class="dash-breadcrumb">
+            <a href="dashboard.php">Admin</a>
+            <i class="fas fa-chevron-right" style="font-size:.7rem"></i>
+            <span>Reports</span>
+          </div>
+        </div>
+      </div>
 
-<div class="container" style="padding-bottom:60px">
-  <div class="dashboard-layout">
-    <?php adminSidebar('reports'); ?>
-
-    <main>
+      <main>
       <div class="card">
-        <div class="card-header" style="display:flex;align-items:flex-end;justify-content:space-between;gap:12px;flex-wrap:wrap">
+        <div class="card-header" style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap">
           <div>
             <h2 style="margin:0;font-family:var(--font-display);font-size:1.2rem;font-weight:800">Reports & Complaints</h2>
             <div class="text-muted text-sm" style="margin-top:4px"><?= $hasReports ? number_format(count($rows)) . ' result(s).' : 'Table missing.' ?></div>
           </div>
 
-          <form method="GET" action="" class="flex items-center gap-2" style="flex-wrap:wrap">
-            <select name="status" class="form-control" style="min-width:180px">
+          <form method="GET" action="" class="card-filters">
+            <select name="status" class="form-control">
               <option value="open" <?= $status==='open'?'selected':'' ?>>Open</option>
               <option value="resolved" <?= $status==='resolved'?'selected':'' ?>>Resolved</option>
               <option value="dismissed" <?= $status==='dismissed'?'selected':'' ?>>Dismissed</option>
               <option value="" <?= $status===''?'selected':'' ?>>All</option>
             </select>
-            <button class="btn btn-ghost btn-sm" type="submit"><i class="fas fa-filter"></i> Filter</button>
-            <a class="btn btn-ghost btn-sm" href="reports.php"><i class="fas fa-rotate-left"></i> Reset</a>
+            <div class="filter-row">
+              <button class="btn btn-ghost btn-sm" type="submit"><i class="fas fa-filter"></i> Filter</button>
+              <a class="btn btn-ghost btn-sm" href="reports.php"><i class="fas fa-rotate-left"></i> Reset</a>
+            </div>
           </form>
         </div>
 
@@ -164,7 +167,10 @@ require_once __DIR__ . '/../../includes/header.php';
         </div>
       </div>
     </main>
+    </div>
   </div>
 </div>
 
 <?php require_once __DIR__ . '/../../includes/footer.php'; ?>
+
+
