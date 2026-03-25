@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 require_once __DIR__ . '/_bootstrap.php';
 
 requireMethod('GET');
@@ -7,6 +7,21 @@ $id = intval($_GET['id'] ?? 0);
 if ($id <= 0) jsonResponse(['error' => 'Missing id'], 400);
 
 $db = getDB();
+
+$bhCols = $db->query("SHOW COLUMNS FROM boarding_houses")->fetchAll() ?: [];
+$bhFields = array_map(fn($r) => (string)($r['Field'] ?? ''), $bhCols);
+$hasApprovalStatus = in_array('approval_status', $bhFields, true);
+$approvalWhere = "";
+if ($hasApprovalStatus) {
+    if (isAdmin()) {
+        $approvalWhere = "";
+    } elseif (isLoggedIn()) {
+        $approvalWhere = " AND (bh.approval_status = 'approved' OR bh.owner_id = " . intval($_SESSION['user_id']) . ")";
+    } else {
+        $approvalWhere = " AND bh.approval_status = 'approved'";
+    }
+}
+
 
 $stmt = $db->prepare("
   SELECT
@@ -17,7 +32,7 @@ $stmt = $db->prepare("
     u.created_at AS owner_since
   FROM boarding_houses bh
   JOIN users u ON u.id = bh.owner_id
-  WHERE bh.id = ? AND bh.status != 'inactive'
+  WHERE bh.id = ? AND bh.status != 'inactive'$approvalWhere
   LIMIT 1
 ");
 $stmt->execute([$id]);
@@ -68,4 +83,5 @@ $data = [
 ];
 
 jsonResponse(['data' => $data]);
+
 

@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 require_once __DIR__ . '/includes/config.php';
 if (isLoggedIn()) { header('Location: ' . SITE_URL . '/index.php'); exit; }
 $pageTitle = 'Create Account';
@@ -31,11 +31,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $_SESSION['user_id']   = $db->lastInsertId();
             $_SESSION['user_role'] = $formData['role'];
             setFlash('success', 'Welcome to ' . SITE_NAME . '!');
-            header('Location: ' . ($formData['role']==='owner' ? SITE_URL.'/pages/owner/dashboard.php' : SITE_URL.'/index.php'));
+            // Owners require admin verification before using owner tools.
+            header('Location: ' . ($formData['role']==='owner' ? SITE_URL.'/index.php?info=owner_pending' : SITE_URL.'/index.php'));
             exit;
         }
     }
 }
+$showNavbar = false;
 require_once __DIR__ . '/includes/header.php';
 ?>
 <div class="auth-wrap">
@@ -87,10 +89,10 @@ require_once __DIR__ . '/includes/header.php';
       <div class="form-row">
         <div class="form-group">
           <label class="form-label">Password <span class="required">*</span></label>
-          <div class="input-icon" style="position:relative"><i class="fas fa-lock"></i>
+          <div class="input-icon has-trailing-action"><i class="fas fa-lock"></i>
             <input type="password" name="password" id="pw" class="form-control <?= isset($errors['password'])?'error':'' ?>"
                    placeholder="Min. 8 characters" required>
-            <button type="button" data-toggle-password="#pw" style="position:absolute;right:12px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--text-light)"><i class="fas fa-eye"></i></button>
+            <button type="button" class="password-toggle" data-toggle-password="#pw" aria-label="Show password" aria-pressed="false" title="Show password"><i class="fas fa-eye"></i></button>
           </div>
           <?php if (isset($errors['password'])): ?><p class="form-error"><i class="fas fa-exclamation-circle"></i><?= $errors['password'] ?></p><?php endif; ?>
         </div>
@@ -116,3 +118,4 @@ function setRole(val) {
 }
 </script>
 <?php require_once __DIR__ . '/includes/footer.php'; ?>
+

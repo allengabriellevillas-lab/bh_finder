@@ -16,11 +16,35 @@ $offset   = ($page - 1) * $perPage;
 // ── Build Query ──
 $db = getDB();
 
+// Search & filter monitoring (best-effort)
+try {
+    if (($search !== '') || ($city !== '') || ($minPrice > 0) || ($maxPrice > 0) || ($type !== '')) {
+        $ip = $_SERVER['REMOTE_ADDR'] ?? null;
+        $uid = isLoggedIn() ? intval($_SESSION['user_id']) : null;
+        $ins = $db->prepare("INSERT INTO search_logs (user_id, ip, channel, search, city, min_price, max_price, accommodation_type)
+          VALUES (?,?,?,?,?,?,?,?)");
+        $ins->execute([
+            $uid,
+            $ip,
+            'web',
+            $search !== '' ? $search : null,
+            $city !== '' ? $city : null,
+            $minPrice > 0 ? $minPrice : null,
+            $maxPrice > 0 ? $maxPrice : null,
+            $type !== '' ? $type : null,
+        ]);
+    }
+} catch (Throwable $e) {
+    // ignore if table doesn't exist
+}
+
 $bhCols = $db->query('SHOW COLUMNS FROM boarding_houses')->fetchAll() ?: [];
 $bhFields = array_map(fn($r) => (string)($r['Field'] ?? ''), $bhCols);
 $addressCol = in_array('location', $bhFields, true) ? 'location' : (in_array('address', $bhFields, true) ? 'address' : 'location');
+$hasApprovalStatus = in_array('approval_status', $bhFields, true);
 
 $conditions = ["bh.status != 'inactive'"];
+if ($hasApprovalStatus) $conditions[] = "bh.approval_status = 'approved'";
 $params = [];
 
 if ($search !== '') {
@@ -61,16 +85,28 @@ $listingsStmt = $db->prepare("
 $listingsStmt->execute($params);
 $listings = $listingsStmt->fetchAll();
 
-$citiesStmt = $db->query("SELECT DISTINCT city FROM boarding_houses WHERE status != 'inactive' ORDER BY city");
+$citiesWhere = "status != 'inactive'";
+if ($hasApprovalStatus) $citiesWhere .= " AND approval_status = 'approved'";
+$citiesStmt = $db->query("SELECT DISTINCT city FROM boarding_houses WHERE $citiesWhere ORDER BY city");
 $cities = $citiesStmt->fetchAll(PDO::FETCH_COLUMN) ?: [];
 
 // Quick stats
-$activeListings = intval($db->query("SELECT COUNT(*) FROM boarding_houses WHERE status != 'inactive'")->fetchColumn() ?: 0);
+$activeWhere = "status != 'inactive'";
+if ($hasApprovalStatus) $activeWhere .= " AND approval_status = 'approved'";
+$activeListings = intval($db->query("SELECT COUNT(*) FROM boarding_houses WHERE $activeWhere")->fetchColumn() ?: 0);
 $ownerCount = intval($db->query("SELECT COUNT(*) FROM users WHERE role = 'owner'")->fetchColumn() ?: 0);
 $tenantCount = intval($db->query("SELECT COUNT(*) FROM users WHERE role = 'tenant'")->fetchColumn() ?: 0);
 
 $typeLabels = ['solo_room'=>'Solo Room','shared_room'=>'Shared Room','bedspace'=>'Bedspace','studio'=>'Studio','apartment'=>'Apartment','entire_unit'=>'Entire Unit'];
 $typeClasses = ['solo_room'=>'badge-solo','shared_room'=>'badge-shared','bedspace'=>'badge-shared','studio'=>'badge-studio','apartment'=>'badge-apartment','entire_unit'=>'badge-apartment'];
+
+// Announcements (best-effort)
+$announcement = null;
+try {
+    $announcement = $db->query("SELECT title, body FROM announcements WHERE is_active = 1 ORDER BY created_at DESC LIMIT 1")->fetch() ?: null;
+} catch (Throwable $e) {
+    $announcement = null;
+}
 
 function buildQS(array $overrides = []): string {
     $p = array_merge($_GET, $overrides);
@@ -82,54 +118,25 @@ $currentUser = isLoggedIn() ? getCurrentUser() : null;
 require_once __DIR__ . '/includes/header.php';
 ?>
 
-<nav class="navbar">
-  <div class="container navbar-inner">
-    <a class="brand" href="<?= SITE_URL ?>/index.php">
-      <span class="brand-icon"><i class="fas fa-home"></i></span>
-      <span><?= sanitize(SITE_NAME) ?></span>
-    </a>
-
-    <button class="nav-toggle" id="navToggle" type="button" aria-label="Toggle navigation">
-      <span></span><span></span><span></span>
-    </button>
-
-    <div class="nav-links" id="navLinks">
-      <a class="nav-link active" href="<?= SITE_URL ?>/index.php">Home</a>
-      <a class="nav-link" href="#listings">Browse</a>
-
-      <?php if (!isLoggedIn()): ?>
-        <a class="nav-link btn-outline-sm" href="<?= SITE_URL ?>/login.php"><i class="fas fa-right-to-bracket"></i> Login</a>
-        <a class="nav-link btn-primary-sm" href="<?= SITE_URL ?>/register.php?role=owner"><i class="fas fa-plus"></i> List Property</a>
-      <?php else: ?>
-        <div class="nav-user">
-          <button class="user-btn" id="userBtn" type="button">
-            <span class="user-avatar"><?= strtoupper(substr(sanitize($currentUser['full_name'] ?? 'U'), 0, 1)) ?></span>
-            <span><?= sanitize($currentUser['full_name'] ?? 'Account') ?></span>
-            <i class="fas fa-chevron-down" style="font-size:0.7rem;color:var(--text-light)"></i>
-          </button>
-
-          <div class="user-dropdown" id="userDropdown">
-            <div class="dropdown-header">
-              <strong><?= sanitize($currentUser['full_name'] ?? '') ?></strong>
-              <span><?= sanitize($currentUser['email'] ?? '') ?></span>
-              <span class="role-badge <?= isOwner() ? 'role-owner' : 'role-tenant' ?>"><?= sanitize($currentUser['role'] ?? '') ?></span>
-            </div>
-
-            <?php if (isOwner()): ?>
-              <a href="<?= SITE_URL ?>/pages/owner/dashboard.php"><i class="fas fa-gauge"></i> Dashboard</a>
-              <a href="<?= SITE_URL ?>/pages/owner/add_listing.php"><i class="fas fa-plus"></i> Add Listing</a>
-              <hr>
-            <?php endif; ?>
-
-            <a class="logout-link" href="<?= SITE_URL ?>/logout.php"><i class="fas fa-right-from-bracket"></i> Logout</a>
-          </div>
-        </div>
-      <?php endif; ?>
-    </div>
-  </div>
-</nav>
 
 <div class="main-content">
+  <?php if ($announcement): ?>
+    <section class="section" style="padding:22px 0 0 0">
+      <div class="container" style="max-width:980px">
+        <div class="card" style="border-left:6px solid var(--primary)">
+          <div class="card-body">
+            <div class="flex items-center gap-2" style="margin-bottom:8px;color:var(--secondary)">
+              <i class="fas fa-bullhorn"></i>
+              <strong><?= sanitize($announcement['title'] ?? 'Announcement') ?></strong>
+            </div>
+            <?php if (!empty($announcement['body'])): ?>
+              <div class="text-muted" style="white-space:pre-wrap;line-height:1.8"><?= sanitize($announcement['body']) ?></div>
+            <?php endif; ?>
+          </div>
+        </div>
+      </div>
+    </section>
+  <?php endif; ?>
   <section class="hero">
     <div class="container">
       <div class="hero-content">
@@ -296,3 +303,4 @@ require_once __DIR__ . '/includes/header.php';
 </div>
 
 <?php require_once __DIR__ . '/includes/footer.php'; ?>
+

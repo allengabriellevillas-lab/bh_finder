@@ -57,6 +57,7 @@ $listingsStmt = $db->prepare("SELECT
 $listingsStmt->execute([$_SESSION['user_id']]);
 $listings = $listingsStmt->fetchAll() ?: [];
 
+$showNavbar = false;
 require_once __DIR__ . '/../../includes/header.php';
 ?>
 
@@ -229,4 +230,5 @@ require_once __DIR__ . '/../../includes/header.php';
 </div>
 
 <?php require_once __DIR__ . '/../../includes/footer.php'; ?>
+
 

@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 require_once __DIR__ . '/_bootstrap.php';
 
 requireMethod('GET');
@@ -11,7 +11,13 @@ $offset = max(0, intval($_GET['offset'] ?? 0));
 
 $db = getDB();
 
+$bhCols = $db->query("SHOW COLUMNS FROM boarding_houses")->fetchAll() ?: [];
+$bhFields = array_map(fn($r) => (string)($r['Field'] ?? ''), $bhCols);
+$hasApprovalStatus = in_array('approval_status', $bhFields, true);
+
+
 $conditions = ["bh.status != 'inactive'"];
+if ($hasApprovalStatus) $conditions[] = "bh.approval_status = 'approved'";
 $params = [];
 
 if ($search !== '') {
@@ -30,6 +36,19 @@ if ($type !== '') {
 }
 
 $where = 'WHERE ' . implode(' AND ', $conditions);
+
+// Search monitoring (best-effort)
+try {
+    if (($search !== '') || ($city !== '') || ($type !== '')) {
+        $ip = $_SERVER['REMOTE_ADDR'] ?? null;
+        $uid = isLoggedIn() ? intval($_SESSION['user_id']) : null;
+        $ins = $db->prepare("INSERT INTO search_logs (user_id, ip, channel, search, city, accommodation_type) VALUES (?,?,?,?,?,?)");
+        $ins->execute([$uid, $ip, 'api', $search !== '' ? $search : null, $city !== '' ? $city : null, $type !== '' ? $type : null]);
+    }
+} catch (Throwable $e) {
+    // ignore
+}
+
 
 $stmt = $db->prepare("
   SELECT

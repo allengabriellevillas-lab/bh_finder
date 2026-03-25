@@ -260,7 +260,11 @@ document.addEventListener('DOMContentLoaded', function () {
             if (input) {
                 input.type = input.type === 'password' ? 'text' : 'password';
                 const icon = this.querySelector('i');
-                if (icon) icon.className = input.type === 'password' ? 'fas fa-eye' : 'fas fa-eye-slash';
+                const shown = input.type === 'text';
+                if (icon) icon.className = shown ? 'fas fa-eye-slash' : 'fas fa-eye';
+                this.setAttribute('aria-pressed', String(shown));
+                this.setAttribute('aria-label', shown ? 'Hide password' : 'Show password');
+                this.setAttribute('title', shown ? 'Hide password' : 'Show password');
             }
         });
     });

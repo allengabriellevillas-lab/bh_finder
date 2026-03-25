@@ -80,10 +80,27 @@ function isOwner(): bool {
     return isset($_SESSION['user_role']) && $_SESSION['user_role'] === 'owner';
 }
 
+function isAdmin(): bool {
+    return isset($_SESSION['user_role']) && $_SESSION['user_role'] === 'admin';
+}
+
 function requireLogin(): void {
     if (!isLoggedIn()) {
         header('Location: ' . SITE_URL . '/login.php?redirect=' . urlencode($_SERVER['REQUEST_URI']));
         exit;
+    }
+
+    // If the account was deactivated, force logout.
+    try {
+        $u = getCurrentUser();
+        if (is_array($u) && array_key_exists('is_active', $u) && intval($u['is_active']) === 0) {
+            $_SESSION = [];
+            if (session_status() === PHP_SESSION_ACTIVE) session_destroy();
+            header('Location: ' . SITE_URL . '/login.php?error=deactivated');
+            exit;
+        }
+    } catch (Throwable $e) {
+        // Ignore DB errors here; the page will likely error elsewhere anyway.
     }
 }
 
@@ -93,30 +110,70 @@ function requireOwner(): void {
         header('Location: ' . SITE_URL . '/index.php?error=access_denied');
         exit;
     }
+
+    // Owners may be required to be verified by admin before using owner tools.
+    try {
+        $u = getCurrentUser();
+        if (is_array($u) && array_key_exists('owner_verified', $u) && intval($u['owner_verified']) !== 1) {
+            setFlash('error', 'Your owner account is pending verification by an administrator.');
+            header('Location: ' . SITE_URL . '/index.php?error=owner_unverified');
+            exit;
+        }
+    } catch (Throwable $e) {
+        // Ignore for compatibility with older schemas.
+    }
+}
+
+function requireAdmin(): void {
+    requireLogin();
+    if (!isAdmin()) {
+        header('Location: ' . SITE_URL . '/index.php?error=access_denied');
+        exit;
+    }
 }
 
 function getCurrentUser(): ?array {
     if (!isLoggedIn()) return null;
 
-    static $hasAvatar = null;
+    static $userColFlags = null;
     $db = getDB();
 
-    if ($hasAvatar === null) {
+    if ($userColFlags === null) {
+        $userColFlags = [
+            'avatar' => false,
+            'is_active' => false,
+            'owner_verified' => false,
+            'owner_verified_at' => false,
+        ];
         try {
-            $chk = $db->prepare("SELECT COUNT(*)
+            $chk = $db->prepare("SELECT COLUMN_NAME
               FROM INFORMATION_SCHEMA.COLUMNS
               WHERE TABLE_SCHEMA = DATABASE()
                 AND TABLE_NAME = 'users'
-                AND COLUMN_NAME = 'avatar'");
+                AND COLUMN_NAME IN ('avatar','is_active','owner_verified','owner_verified_at')");
             $chk->execute();
-            $hasAvatar = intval($chk->fetchColumn() ?: 0) > 0;
+            $cols = $chk->fetchAll(PDO::FETCH_COLUMN) ?: [];
+            foreach ($cols as $c) {
+                $c = (string)$c;
+                if (array_key_exists($c, $userColFlags)) $userColFlags[$c] = true;
+            }
         } catch (Throwable $e) {
-            // If INFORMATION_SCHEMA is restricted, just assume the column doesn't exist.
-            $hasAvatar = false;
+            // If INFORMATION_SCHEMA is restricted, just assume extra columns don't exist.
+            $userColFlags = [
+                'avatar' => false,
+                'is_active' => false,
+                'owner_verified' => false,
+                'owner_verified_at' => false,
+            ];
         }
     }
 
-    $cols = "id, full_name, email, role, phone" . ($hasAvatar ? ", avatar" : "");
+    $cols = "id, full_name, email, role, phone";
+    if (!empty($userColFlags['avatar'])) $cols .= ", avatar";
+    if (!empty($userColFlags['is_active'])) $cols .= ", is_active";
+    if (!empty($userColFlags['owner_verified'])) $cols .= ", owner_verified";
+    if (!empty($userColFlags['owner_verified_at'])) $cols .= ", owner_verified_at";
+
     $stmt = $db->prepare("SELECT $cols FROM users WHERE id = ?");
     $stmt->execute([$_SESSION['user_id']]);
     return $stmt->fetch() ?: null;
@@ -146,7 +203,7 @@ function sanitize(mixed $input): string {
 
 // Format currency
 function formatPrice(float $price): string {
-    return '₱' . number_format($price, 2);
+    return 'â‚±' . number_format($price, 2);
 }
 
 // Upload image helper
@@ -209,5 +266,6 @@ function deleteUploadedFile(string $storedName): bool {
 
     return unlink($candidate);
 }
+
 
 

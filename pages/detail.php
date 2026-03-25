@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 require_once __DIR__ . '/../includes/config.php';
 
 $id = intval($_GET['id'] ?? 0);
@@ -8,6 +8,22 @@ if (!$id) {
 }
 
 $db = getDB();
+
+$bhCols = $db->query("SHOW COLUMNS FROM boarding_houses")->fetchAll() ?: [];
+$bhFields = array_map(fn($r) => (string)($r['Field'] ?? ''), $bhCols);
+$hasApprovalStatus = in_array('approval_status', $bhFields, true);
+$approvalWhere = "";
+if ($hasApprovalStatus) {
+    if (isAdmin()) {
+        $approvalWhere = "";
+    } elseif (isLoggedIn()) {
+        $approvalWhere = " AND (bh.approval_status = 'approved' OR bh.owner_id = " . intval($_SESSION['user_id']) . ")";
+    } else {
+        $approvalWhere = " AND bh.approval_status = 'approved'";
+    }
+}
+$hasViews = in_array('views', $bhFields, true);
+
 $stmt = $db->prepare("
     SELECT
         bh.*,
@@ -17,7 +33,7 @@ $stmt = $db->prepare("
         u.created_at AS owner_since
     FROM boarding_houses bh
     JOIN users u ON u.id = bh.owner_id
-    WHERE bh.id = ? AND bh.status != 'inactive'
+    WHERE bh.id = ? AND bh.status != 'inactive'$approvalWhere
 ");
 $stmt->execute([$id]);
 $bh = $stmt->fetch();
@@ -25,6 +41,17 @@ if (!$bh) {
     setFlash('error', 'Listing not found.');
     header('Location: ' . SITE_URL . '/index.php');
     exit;
+}
+
+
+// Count page views (best-effort)
+if ($hasViews) {
+    try {
+        $db->prepare("UPDATE boarding_houses SET views = views + 1 WHERE id = ?")->execute([$id]);
+        if (isset($bh['views'])) $bh['views'] = intval($bh['views']) + 1;
+    } catch (Throwable $e) {
+        // ignore
+    }
 }
 
 $currentUser = isLoggedIn() ? getCurrentUser() : null;
@@ -75,6 +102,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['contact_submit'])) {
         $ins = $db->prepare("INSERT INTO contact_messages (boarding_house_id,sender_id,sender_name,sender_email,sender_phone,message) VALUES(?,?,?,?,?,?)");
         $ins->execute([$id, $senderId, $cName, $cEmail, $cPhone, $cMessage]);
         $contactSuccess = true;
+    }
+}
+
+
+// Handle report form
+$reportSuccess = false;
+$reportErrors = [];
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['report_submit'])) {
+    $rReason = trim((string)($_POST['reason'] ?? ''));
+    $rDetails = trim((string)($_POST['details'] ?? ''));
+
+    if ($rReason === '') $reportErrors['reason'] = 'Reason is required.';
+
+    if (empty($reportErrors)) {
+        try {
+            $reporterId = isLoggedIn() ? intval($_SESSION['user_id']) : null;
+            $ins = $db->prepare("INSERT INTO reports (boarding_house_id, reporter_id, reason, details) VALUES (?,?,?,?)");
+            $ins->execute([$id, $reporterId, $rReason, $rDetails !== '' ? $rDetails : null]);
+            $reportSuccess = true;
+        } catch (Throwable $e) {
+            $reportErrors['general'] = 'Reporting is currently unavailable.';
+        }
     }
 }
 
@@ -264,6 +313,40 @@ require_once __DIR__ . '/../includes/header.php';
             <button type="submit" class="btn btn-primary btn-block"><i class="fas fa-paper-plane"></i> Send Message</button>
           </form>
         <?php endif; ?>
+
+        <hr style="border:none;border-top:1px solid var(--border);margin:18px 0">
+
+        <h3 style="font-family:var(--font-display);font-size:1rem;margin-bottom:12px">Report this listing</h3>
+
+        <?php if ($reportSuccess): ?>
+          <div class="flash flash-success mb-3"><i class="fas fa-check-circle"></i> Report submitted. Thank you.</div>
+        <?php else: ?>
+          <?php if (!empty($reportErrors['general'])): ?>
+            <div class="flash flash-error mb-3"><i class="fas fa-exclamation-circle"></i><?= sanitize($reportErrors['general']) ?></div>
+          <?php endif; ?>
+
+          <form method="POST" action="" data-validate>
+            <div class="form-group">
+              <label class="form-label">Reason <span class="required">*</span></label>
+              <select name="reason" class="form-control <?= isset($reportErrors['reason']) ? 'error' : '' ?>" required>
+                <?php $sel = sanitize($_POST['reason'] ?? ''); ?>
+                <option value="">Select a reason</option>
+                <option value="Fake listing" <?= $sel==='Fake listing'?'selected':'' ?>>Fake listing</option>
+                <option value="Misleading information" <?= $sel==='Misleading information'?'selected':'' ?>>Misleading information</option>
+                <option value="Inappropriate content" <?= $sel==='Inappropriate content'?'selected':'' ?>>Inappropriate content</option>
+                <option value="Other" <?= $sel==='Other'?'selected':'' ?>>Other</option>
+              </select>
+              <?php if (isset($reportErrors['reason'])): ?><p class="form-error"><i class="fas fa-exclamation-circle"></i><?= sanitize($reportErrors['reason']) ?></p><?php endif; ?>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Details (optional)</label>
+              <textarea name="details" class="form-control" rows="3" placeholder="Add any helpful details..."><?= sanitize($_POST['details'] ?? '') ?></textarea>
+            </div>
+            <input type="hidden" name="report_submit" value="1">
+            <button type="submit" class="btn btn-ghost btn-sm"><i class="fas fa-flag"></i> Submit Report</button>
+          </form>
+        <?php endif; ?>
+
       </div>
     </div>
 
@@ -271,3 +354,4 @@ require_once __DIR__ . '/../includes/header.php';
 </div>
 
 <?php require_once __DIR__ . '/../includes/footer.php'; ?>
+

@@ -29,6 +29,7 @@ $hasAddress = $hasCol('address');
 $hasStatus = $hasCol('status');
 $hasContactPhone = $hasCol('contact_phone');
 $hasContactEmail = $hasCol('contact_email');
+$hasApprovalStatusCol = $hasCol('approval_status');
 
 $accommodationTypeValues = enumValuesFromColumns($bhColumns, 'accommodation_type');
 if (empty($accommodationTypeValues)) $accommodationTypeValues = ['solo_room','shared_room','studio','apartment'];
@@ -112,6 +113,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($hasStatus) { $cols[] = 'status'; $vals[] = $defaultStatus; }
         if ($hasContactPhone) { $cols[] = 'contact_phone'; $vals[] = $formData['contact_phone']; }
         if ($hasContactEmail) { $cols[] = 'contact_email'; $vals[] = $formData['contact_email']; }
+        if ($hasApprovalStatusCol) { $cols[] = 'approval_status'; $vals[] = 'pending'; }
 
         $placeholders = implode(',', array_fill(0, count($cols), '?'));
         $sql = "INSERT INTO boarding_houses (" . implode(',', $cols) . ") VALUES ($placeholders)";
@@ -153,6 +155,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
+$showNavbar = false;
 require_once __DIR__ . '/../../includes/header.php';
 ?>
 
@@ -318,5 +321,6 @@ require_once __DIR__ . '/../../includes/header.php';
 </div>
 
 <?php require_once __DIR__ . '/../../includes/footer.php'; ?>
+
 
 

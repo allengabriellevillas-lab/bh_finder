@@ -65,6 +65,7 @@ $subject = rawurlencode('Re: ' . $listingName . ' inquiry #' . $id);
 $body = rawurlencode("Hi {$senderName},\n\nThanks for your inquiry about {$listingName}.\n\n(Write your reply here)\n\nRegards,\n" . (getCurrentUser()['full_name'] ?? 'Owner'));
 $mailto = $senderEmail !== '' ? ('mailto:' . $senderEmail . '?subject=' . $subject . '&body=' . $body) : '#';
 
+$showNavbar = false;
 require_once __DIR__ . '/../../includes/header.php';
 ?>
 
@@ -160,3 +161,4 @@ require_once __DIR__ . '/../../includes/header.php';
 </div>
 
 <?php require_once __DIR__ . '/../../includes/footer.php'; ?>
+
