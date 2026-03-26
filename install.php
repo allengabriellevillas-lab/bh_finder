@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 // One-time installer to create the database + tables and seed demo data.
 // After running successfully, delete this file (or restrict access) in production.
 
@@ -39,8 +39,107 @@ function runSchema(): void {
     foreach (preg_split('/;\\s*\\R/', $sql) as $stmt) {
         $stmt = trim($stmt);
         if ($stmt === '' || str_starts_with($stmt, '--')) continue;
-        $db->exec($stmt);
+        try {
+            $db->exec($stmt);
+        } catch (Throwable $e) {
+            // Allow installer to proceed if chat tables fail due to FK mismatch
+            // (common when upgrading an existing DB). We'll try to repair later.
+            $s = strtolower($stmt);
+            if (str_contains($s, 'create table') && (str_contains($s, 'chat_messages') || str_contains($s, 'chat_threads'))) {
+                continue;
+            }
+            throw $e;
+        }
     }
+}
+
+function ensureChatTables(): void {
+    $db = getDB();
+
+    // Create tables without FKs first (robust for upgrades); then best-effort add constraints.
+    $db->exec("CREATE TABLE IF NOT EXISTS chat_threads (
+      id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+      boarding_house_id INT UNSIGNED NOT NULL,
+      tenant_id INT UNSIGNED NOT NULL,
+      owner_id INT UNSIGNED NOT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
+      last_message_at TIMESTAMP NULL DEFAULT NULL,
+      PRIMARY KEY (id),
+      UNIQUE KEY uq_thread_bh_tenant (boarding_house_id, tenant_id),
+      KEY idx_thread_owner (owner_id),
+      KEY idx_thread_tenant (tenant_id),
+      KEY idx_thread_last (last_message_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
+    $db->exec("CREATE TABLE IF NOT EXISTS chat_messages (
+      id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+      thread_id INT UNSIGNED NOT NULL,
+      sender_id INT UNSIGNED NOT NULL,
+      message TEXT NOT NULL,
+      is_read TINYINT(1) NOT NULL DEFAULT 0,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_msg_thread (thread_id),
+      KEY idx_msg_created (created_at),
+      KEY idx_msg_read (thread_id, is_read)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
+    // Ensure InnoDB
+    try { $db->exec("ALTER TABLE chat_threads ENGINE=InnoDB"); } catch (Throwable $e) {}
+    try { $db->exec("ALTER TABLE chat_messages ENGINE=InnoDB"); } catch (Throwable $e) {}
+
+    // Best-effort FK constraints (optional).
+    try { $db->exec("ALTER TABLE chat_threads
+        ADD CONSTRAINT fk_thread_bh FOREIGN KEY (boarding_house_id) REFERENCES boarding_houses(id) ON DELETE CASCADE"); } catch (Throwable $e) {}
+    try { $db->exec("ALTER TABLE chat_threads
+        ADD CONSTRAINT fk_thread_tenant FOREIGN KEY (tenant_id) REFERENCES users(id) ON DELETE CASCADE"); } catch (Throwable $e) {}
+    try { $db->exec("ALTER TABLE chat_threads
+        ADD CONSTRAINT fk_thread_owner FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE"); } catch (Throwable $e) {}
+    try { $db->exec("ALTER TABLE chat_messages
+        ADD CONSTRAINT fk_msg_thread FOREIGN KEY (thread_id) REFERENCES chat_threads(id) ON DELETE CASCADE"); } catch (Throwable $e) {}
+    try { $db->exec("ALTER TABLE chat_messages
+        ADD CONSTRAINT fk_msg_sender FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE"); } catch (Throwable $e) {}
+}
+function ensureRoomTables(): void {
+    $db = getDB();
+
+    $db->exec("CREATE TABLE IF NOT EXISTS rooms (
+      id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+      boarding_house_id INT UNSIGNED NOT NULL,
+      room_name VARCHAR(120) NOT NULL,
+      price DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+      capacity INT UNSIGNED NOT NULL DEFAULT 1,
+      current_occupants INT UNSIGNED NOT NULL DEFAULT 0,
+      status ENUM('available','occupied') NOT NULL DEFAULT 'available',
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_rooms_bh (boarding_house_id),
+      KEY idx_rooms_status (status)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
+    $db->exec("CREATE TABLE IF NOT EXISTS room_requests (
+      id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+      room_id INT UNSIGNED NOT NULL,
+      tenant_id INT UNSIGNED NOT NULL,
+      status ENUM('pending','approved','rejected','cancelled') NOT NULL DEFAULT 'pending',
+      move_in_date DATE NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_rr_room (room_id),
+      KEY idx_rr_tenant (tenant_id),
+      KEY idx_rr_status (status)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
+    // Best-effort FKs (optional for upgrades)
+    try { $db->exec("ALTER TABLE rooms
+        ADD CONSTRAINT fk_rooms_bh FOREIGN KEY (boarding_house_id) REFERENCES boarding_houses(id) ON DELETE CASCADE"); } catch (Throwable $e) {}
+    try { $db->exec("ALTER TABLE room_requests
+        ADD CONSTRAINT fk_rr_room FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE CASCADE"); } catch (Throwable $e) {}
+    try { $db->exec("ALTER TABLE room_requests
+        ADD CONSTRAINT fk_rr_tenant FOREIGN KEY (tenant_id) REFERENCES users(id) ON DELETE CASCADE"); } catch (Throwable $e) {}
 }
 function ensureAvatarColumn(): void {
     $db = getDB();
@@ -192,6 +291,8 @@ try {
     ensureUserRoleSupportsAdmin();
     ensureBoardingHouseModerationColumns();
     ensureContactReplyColumns();
+    ensureChatTables();
+    ensureRoomTables();
     seedDemoData();
     $ok = true;
 } catch (Throwable $e) {
@@ -229,6 +330,8 @@ try {
   </div>
 </body>
 </html>
+
+
 
 
 

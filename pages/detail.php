@@ -84,28 +84,6 @@ $bhMapQuery = $bhFullLocation !== '' ? rawurlencode($bhFullLocation) : '';
 $bhMapEmbedUrl = $bhMapQuery !== '' ? ("https://www.google.com/maps?q={$bhMapQuery}&output=embed") : '';
 $bhMapLinkUrl = $bhMapQuery !== '' ? ("https://www.google.com/maps?q={$bhMapQuery}") : '';
 
-// Handle contact form
-$contactSuccess = false;
-$contactErrors = [];
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['contact_submit'])) {
-    $cName = trim($_POST['sender_name'] ?? '');
-    $cEmail = trim($_POST['sender_email'] ?? '');
-    $cPhone = trim($_POST['sender_phone'] ?? '');
-    $cMessage = trim($_POST['message'] ?? '');
-
-    if ($cName === '') $contactErrors['name'] = 'Name is required.';
-    if ($cEmail === '' || !filter_var($cEmail, FILTER_VALIDATE_EMAIL)) $contactErrors['email'] = 'Valid email required.';
-    if ($cMessage === '') $contactErrors['message'] = 'Message is required.';
-
-    if (empty($contactErrors)) {
-        $senderId = isLoggedIn() ? $_SESSION['user_id'] : null;
-        $ins = $db->prepare("INSERT INTO contact_messages (boarding_house_id,sender_id,sender_name,sender_email,sender_phone,message) VALUES(?,?,?,?,?,?)");
-        $ins->execute([$id, $senderId, $cName, $cEmail, $cPhone, $cMessage]);
-        $contactSuccess = true;
-    }
-}
-
-
 // Handle report form
 $reportSuccess = false;
 $reportErrors = [];
@@ -278,40 +256,9 @@ require_once __DIR__ . '/../includes/header.php';
           </div>
         <?php endif; ?>
 
-        <?php if ($contactSuccess): ?>
-          <div class="flash flash-success mb-4"><i class="fas fa-check-circle"></i> Message sent! The owner will contact you soon.</div>
-        <?php else: ?>
-          <h3 style="font-family:var(--font-display);font-size:1rem;margin-bottom:16px">Send a Message</h3>
-          <form method="POST" action="" data-validate>
-            <div class="form-group">
-              <label class="form-label">Your Name <span class="required">*</span></label>
-              <input type="text" name="sender_name" class="form-control <?= isset($contactErrors['name']) ? 'error' : '' ?>"
-                     placeholder="Juan Dela Cruz" value="<?= $currentUser ? sanitize($currentUser['full_name'] ?? '') : '' ?>" required>
-              <?php if (isset($contactErrors['name'])): ?><p class="form-error"><i class="fas fa-exclamation-circle"></i><?= sanitize($contactErrors['name']) ?></p><?php endif; ?>
-            </div>
 
-            <div class="form-group">
-              <label class="form-label">Email <span class="required">*</span></label>
-              <input type="email" name="sender_email" class="form-control <?= isset($contactErrors['email']) ? 'error' : '' ?>"
-                     placeholder="you@email.com" value="<?= $currentUser ? sanitize($currentUser['email'] ?? '') : '' ?>" required>
-              <?php if (isset($contactErrors['email'])): ?><p class="form-error"><i class="fas fa-exclamation-circle"></i><?= sanitize($contactErrors['email']) ?></p><?php endif; ?>
-            </div>
-
-            <div class="form-group">
-              <label class="form-label">Phone (optional)</label>
-              <input type="tel" name="sender_phone" class="form-control" placeholder="09171234567" value="<?= $currentUser ? sanitize($currentUser['phone'] ?? '') : '' ?>">
-            </div>
-
-            <div class="form-group">
-              <label class="form-label">Message <span class="required">*</span></label>
-              <textarea name="message" class="form-control <?= isset($contactErrors['message']) ? 'error' : '' ?>"
-                        placeholder="Hi, I'm interested in renting a room. Is it still available?" required><?= sanitize($_POST['message'] ?? '') ?></textarea>
-              <?php if (isset($contactErrors['message'])): ?><p class="form-error"><i class="fas fa-exclamation-circle"></i><?= sanitize($contactErrors['message']) ?></p><?php endif; ?>
-            </div>
-
-            <input type="hidden" name="contact_submit" value="1">
-            <button type="submit" class="btn btn-primary btn-block"><i class="fas fa-paper-plane"></i> Send Message</button>
-          </form>
+        <?php if (isLoggedIn() && isTenant() && intval($bh['owner_id'] ?? 0) !== intval($_SESSION['user_id'] ?? 0)): ?>
+          <a class="btn btn-primary btn-block" style="margin-bottom:14px" href="<?= SITE_URL ?>/pages/chat.php?bh_id=<?= intval($id) ?>"><i class="fas fa-comments"></i> Chat with Owner</a>
         <?php endif; ?>
 
         <hr style="border:none;border-top:1px solid var(--border);margin:18px 0">

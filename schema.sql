@@ -1,4 +1,4 @@
--- Boarding House Finder - MySQL schema
+﻿-- Boarding House Finder - MySQL schema
 -- Import this into phpMyAdmin, or run from CLI:
 --   mysql -u root boarding_house_finder < schema.sql
 
@@ -33,8 +33,8 @@ CREATE TABLE IF NOT EXISTS boarding_houses (
   price_min DECIMAL(10,2) NOT NULL DEFAULT 0.00,
   price_max DECIMAL(10,2) NULL DEFAULT NULL,
   accommodation_type ENUM('solo_room','shared_room','studio','apartment') NOT NULL DEFAULT 'solo_room',
-  total_rooms INT UNSIGNED NOT NULL DEFAULT 1,
-  available_rooms INT UNSIGNED NOT NULL DEFAULT 1,
+  total_rooms INT UNSIGNED NOT NULL DEFAULT 0,
+  available_rooms INT UNSIGNED NOT NULL DEFAULT 0,
   status ENUM('active','inactive','full') NOT NULL DEFAULT 'active',
   contact_phone VARCHAR(50) NULL,
   contact_email VARCHAR(190) NULL,
@@ -182,3 +182,90 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   KEY idx_audit_admin (admin_id),
   KEY idx_audit_created (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Favorites / Saved Listings
+-- Note: foreign keys are intentionally omitted for import compatibility
+-- with older schemas (signed vs unsigned IDs / non-InnoDB tables).
+CREATE TABLE IF NOT EXISTS favorites (
+  user_id INT NOT NULL,
+  boarding_house_id INT NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id, boarding_house_id),
+  KEY idx_fav_bh (boarding_house_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Ratings / Reviews
+CREATE TABLE IF NOT EXISTS reviews (
+  id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  boarding_house_id INT NOT NULL,
+  user_id INT NOT NULL,
+  rating TINYINT UNSIGNED NOT NULL,
+  review TEXT NULL,
+  is_hidden TINYINT(1) NOT NULL DEFAULT 0,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_review_user_bh (user_id, boarding_house_id),
+  KEY idx_review_bh (boarding_house_id),
+  KEY idx_review_rating (rating)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- In-app Chat (Tenant <-> Owner per listing)
+CREATE TABLE IF NOT EXISTS chat_threads (
+  id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  boarding_house_id INT NOT NULL,
+  tenant_id INT NOT NULL,
+  owner_id INT NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
+  last_message_at TIMESTAMP NULL DEFAULT NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_thread_bh_tenant (boarding_house_id, tenant_id),
+  KEY idx_thread_owner (owner_id),
+  KEY idx_thread_tenant (tenant_id),
+  KEY idx_thread_last (last_message_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+  id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  thread_id INT NOT NULL,
+  sender_id INT NOT NULL,
+  message TEXT NOT NULL,
+  is_read TINYINT(1) NOT NULL DEFAULT 0,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_msg_thread (thread_id),
+  KEY idx_msg_created (created_at),
+  KEY idx_msg_read (thread_id, is_read)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Room Management (Boarding House -> Rooms -> Tenant Requests)
+CREATE TABLE IF NOT EXISTS rooms (
+  id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  boarding_house_id INT NOT NULL,
+  room_name VARCHAR(120) NOT NULL,
+  price DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+  capacity INT UNSIGNED NOT NULL DEFAULT 1,
+  current_occupants INT UNSIGNED NOT NULL DEFAULT 0,
+  status ENUM('available','occupied') NOT NULL DEFAULT 'available',
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_rooms_bh (boarding_house_id),
+  KEY idx_rooms_status (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS room_requests (
+  id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  room_id INT NOT NULL,
+  tenant_id INT NOT NULL,
+  status ENUM('pending','approved','rejected','cancelled') NOT NULL DEFAULT 'pending',
+  move_in_date DATE NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_rr_room (room_id),
+  KEY idx_rr_tenant (tenant_id),
+  KEY idx_rr_status (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+

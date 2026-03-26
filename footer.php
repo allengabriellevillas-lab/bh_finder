@@ -1,4 +1,4 @@
-<?php // includes/footer.php ?>
+﻿<?php // includes/footer.php ?>
 </main>
 
 <footer class="footer">
@@ -7,7 +7,7 @@
             <div class="footer-brand">
                 <a href="<?= SITE_URL ?>/index.php" class="brand">
                     <span class="brand-icon">
-                        <img class="footer-logo" src="<?= SITE_URL ?>/bh_finder-logo.png" alt="<?= sanitize(SITE_NAME) ?> logo">
+                        <img class="footer-logo" src="<?= SITE_URL ?>/boardease-logo.png" alt="<?= sanitize(SITE_NAME) ?> logo">
                     </span>
                     <span class="sr-only"><?= SITE_NAME ?></span>
                 </a>
@@ -41,3 +41,4 @@
 <script src="<?= SITE_URL ?>/js/main.js"></script>
 </body>
 </html>
+

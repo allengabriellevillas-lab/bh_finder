@@ -62,37 +62,16 @@ $inactiveCount = intval($stats['inactive_count'] ?? 0);
 $totalRooms = intval($stats['total_rooms'] ?? 0);
 $availableRooms = intval($stats['available_rooms'] ?? 0);
 
-$msgStmt = $db->prepare("SELECT COUNT(*)
-  FROM contact_messages cm
-  JOIN boarding_houses bh ON bh.id = cm.boarding_house_id
-  WHERE bh.owner_id = ?");
-$msgStmt->execute([$_SESSION['user_id']]);
-$messageCount = intval($msgStmt->fetchColumn() ?: 0);
-
-$unreadMessageCount = 0;
-try {
-    $unreadStmt = $db->prepare("SELECT COUNT(*)
-      FROM contact_messages cm
-      JOIN boarding_houses bh ON bh.id = cm.boarding_house_id
-      WHERE bh.owner_id = ? AND cm.is_read = 0");
-    $unreadStmt->execute([$_SESSION['user_id']]);
-    $unreadMessageCount = intval($unreadStmt->fetchColumn() ?: 0);
-} catch (Throwable $e) {
-    $unreadMessageCount = 0;
-}
-
 $listingsStmt = $db->prepare("SELECT
     bh.*,
     (SELECT pi.image_path FROM boarding_house_images pi
       WHERE pi.boarding_house_id = bh.id AND pi.is_cover = 1
-      LIMIT 1) AS cover_image,
-    (SELECT COUNT(*) FROM contact_messages cm WHERE cm.boarding_house_id = bh.id) AS message_count
+      LIMIT 1) AS cover_image
   FROM boarding_houses bh
   WHERE bh.owner_id = ?
   ORDER BY bh.created_at DESC");
 $listingsStmt->execute([$_SESSION['user_id']]);
 $listings = $listingsStmt->fetchAll() ?: [];
-
 $showNavbar = false;
 require_once __DIR__ . '/../../includes/header.php';
 ?>
@@ -100,7 +79,7 @@ require_once __DIR__ . '/../../includes/header.php';
 <div class="dash-shell">
   <aside class="dash-sidebar">
     <a class="dash-brand" href="dashboard.php" aria-label="<?= sanitize(SITE_NAME) ?>">
-      <span class="dash-logo-wrap"><img class="dash-logo" src="<?= SITE_URL ?>/bh_finder-logo.png" alt="<?= sanitize(SITE_NAME) ?> logo"></span>
+      <span class="dash-logo-wrap"><img class="dash-logo" src="<?= SITE_URL ?>/boardease-logo.png" alt="<?= sanitize(SITE_NAME) ?> logo"></span>
       <span class="sr-only"><?= sanitize(SITE_NAME) ?></span>
     </a>
 
@@ -111,24 +90,11 @@ require_once __DIR__ . '/../../includes/header.php';
 
     <nav class="dash-nav">
       <a class="active" href="dashboard.php"><i class="fas fa-gauge"></i> Overview</a>
-      <a href="add_listing.php"><i class="fas fa-plus"></i> Add Listing</a>
-      <a href="inquiries.php"><i class="fas fa-envelope"></i> Inquiries <?php if ($unreadMessageCount > 0): ?><span class="sidebar-badge"><?= $unreadMessageCount ?></span><?php endif; ?></a>
+      <a href="rooms.php"><i class="fas fa-door-open"></i> Rooms</a>
+      <a href="chats.php"><i class="fas fa-comments"></i> Chats</a>
       <a href="<?= SITE_URL ?>/index.php"><i class="fas fa-house"></i> Browse</a>
     </nav>
 
-    <div class="dash-sidebar-footer">
-      <div class="dash-me">
-        <div class="dash-avatar"><?= strtoupper(substr(sanitize($user['full_name'] ?? 'U'), 0, 1)) ?></div>
-        <div>
-          <strong style="display:block;font-size:.92rem"><?= sanitize($user['full_name'] ?? 'Owner') ?></strong>
-          <small><?= sanitize($user['email'] ?? '') ?></small>
-        </div>
-      </div>
-
-      <div class="dash-nav" style="margin-top:6px">
-        <a href="<?= SITE_URL ?>/logout.php"><i class="fas fa-right-from-bracket"></i> Logout</a>
-      </div>
-    </div>
   </aside>
 
   <div class="dash-main">
@@ -139,17 +105,29 @@ require_once __DIR__ . '/../../includes/header.php';
       </div>
 
       <div class="dash-top-actions">
-        <button class="dash-icon-btn" type="button" title="Notifications" aria-label="Notifications">
-          <i class="far fa-bell"></i>
-        </button>
+        <a class="dash-icon-btn" href="chats.php" title="Chats" aria-label="Chats"><i class="fas fa-comments"></i></a>
 
-        <div class="dash-user" aria-label="Account">
-          <div class="dash-avatar"><?= strtoupper(substr(sanitize($user['full_name'] ?? 'U'), 0, 1)) ?></div>
-          <div class="dash-user-meta">
-            <strong><?= sanitize($user['full_name'] ?? 'Owner') ?></strong>
-            <span>Owner</span>
+        <div class="nav-user">
+          <button class="user-btn" id="userBtn" type="button">
+            <span class="user-avatar"><?= strtoupper(substr(sanitize($me['full_name'] ?? 'U'), 0, 1)) ?></span>
+            <span><?= sanitize($me['full_name'] ?? 'Owner') ?></span>
+            <i class="fas fa-chevron-down" style="font-size:0.7rem;color:var(--text-light)"></i>
+          </button>
+
+          <div class="user-dropdown" id="userDropdown">
+            <div class="dropdown-header">
+              <strong><?= sanitize($me['full_name'] ?? '') ?></strong>
+              <span><?= sanitize($me['email'] ?? '') ?></span>
+              <span class="role-badge role-owner">Owner</span>
+            </div>
+
+            <a href="dashboard.php"><i class="fas fa-gauge"></i> Dashboard</a>
+            <a href="rooms.php"><i class="fas fa-door-open"></i> Rooms</a>
+            <a href="chats.php"><i class="fas fa-comments"></i> Chats</a>
+            <hr>
+
+            <a class="logout-link" href="<?= SITE_URL ?>/logout.php"><i class="fas fa-right-from-bracket"></i> Logout</a>
           </div>
-          <i class="fas fa-chevron-down" style="font-size:.75rem;color:#9CA3AF"></i>
         </div>
       </div>
     </div>
@@ -190,16 +168,7 @@ require_once __DIR__ . '/../../includes/header.php';
             <div class="stat-value" data-count="<?= $availableRooms ?>">0</div>
             <div class="stat-name">Rooms Available (<?= $totalRooms ?> total)</div>
           </div>
-        </div>
-
-        <div class="stat-card">
-          <div class="stat-icon stat-icon-secondary"><i class="fas fa-envelope"></i></div>
-          <div>
-            <div class="stat-value" data-count="<?= $messageCount ?>">0</div>
-            <div class="stat-name">Inquiries</div>
-          </div>
-        </div>
-      </div>
+        </div>\r\n</div>
 
       <div class="card">
         <div class="card-header" style="display:flex;align-items:center;justify-content:space-between;gap:12px">
@@ -215,7 +184,7 @@ require_once __DIR__ . '/../../includes/header.php';
             <div class="empty-state">
               <i class="fas fa-building"></i>
               <h3>No listings yet</h3>
-              <p>Create your first listing to start receiving inquiries.</p>
+              <p>Create your first listing to start receiving chats.</p>
               <a class="btn btn-primary" href="add_listing.php"><i class="fas fa-plus"></i> Add Listing</a>
             </div>
           <?php else: ?>
@@ -227,7 +196,6 @@ require_once __DIR__ . '/../../includes/header.php';
                     <th>Status</th>
                     <th>Rooms</th>
                     <th>Price</th>
-                    <th>Inquiries</th>
                     <th style="width:220px">Actions</th>
                   </tr>
                 </thead>
@@ -238,7 +206,6 @@ require_once __DIR__ . '/../../includes/header.php';
                     $statusClass = $status === 'full' ? 'status-full' : ($status === 'inactive' ? 'status-inactive' : 'status-active');
                     $cover = $l['cover_image'] ?? null;
                     $coverUrl = $cover ? (UPLOAD_URL . sanitize($cover)) : null;
-                    $messages = intval($l['message_count'] ?? 0);
                     $priceMin = (float)($l['price_min'] ?? 0);
                     $priceMax = $l['price_max'] !== null ? (float)$l['price_max'] : null;
                   ?>
@@ -271,15 +238,7 @@ require_once __DIR__ . '/../../includes/header.php';
                       <?php else: ?>
                         <div class="text-muted text-xs">per month</div>
                       <?php endif; ?>
-                    </td>
-                    <td>
-                      <?php if ($messages > 0): ?>
-                        <a href="inquiries.php?listing_id=<?= intval($l['id'] ?? 0) ?>" class="badge" style="background:var(--info-bg);color:var(--info)"><?= $messages ?></a>
-                      <?php else: ?>
-                        <span class="text-muted text-sm">0</span>
-                      <?php endif; ?>
-                    </td>
-                    <td>
+                    </td>\r\n                    <td>
                       <div class="flex flex-wrap gap-2">
                         <a class="btn btn-primary btn-sm" href="<?= SITE_URL ?>/pages/detail.php?id=<?= intval($l['id'] ?? 0) ?>"><i class="fas fa-eye"></i> View</a>
                                                 <a class="btn btn-ghost btn-sm" href="edit_listing.php?id=<?= intval($l['id'] ?? 0) ?>"><i class="fas fa-pen"></i> Edit</a>
@@ -311,6 +270,11 @@ require_once __DIR__ . '/../../includes/header.php';
 </div>
 
 <?php require_once __DIR__ . '/../../includes/footer.php'; ?>
+
+
+
+
+
 
 
 

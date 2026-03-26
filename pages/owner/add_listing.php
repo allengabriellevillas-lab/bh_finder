@@ -30,6 +30,8 @@ $hasStatus = $hasCol('status');
 $hasContactPhone = $hasCol('contact_phone');
 $hasContactEmail = $hasCol('contact_email');
 $hasApprovalStatusCol = $hasCol('approval_status');
+$hasTotalRooms = $hasCol('total_rooms');
+$hasAvailableRooms = $hasCol('available_rooms');
 
 $accommodationTypeValues = enumValuesFromColumns($bhColumns, 'accommodation_type');
 if (empty($accommodationTypeValues)) $accommodationTypeValues = ['solo_room','shared_room','studio','apartment'];
@@ -61,8 +63,6 @@ $formData = [
     'price_min'          => '',
     'price_max'          => '',
     'accommodation_type' => $defaultType,
-    'total_rooms'        => 1,
-    'available_rooms'    => 1,
     'contact_phone'      => $currentUser['phone'] ?? '',
     'contact_email'      => $currentUser['email'] ?? '',
 ];
@@ -80,8 +80,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         'price_min'          => floatval($_POST['price_min'] ?? 0),
         'price_max'          => floatval($_POST['price_max'] ?? 0),
         'accommodation_type' => in_array($submittedType, $accommodationTypeValues, true) ? $submittedType : $defaultType,
-        'total_rooms'        => intval($_POST['total_rooms'] ?? 1),
-        'available_rooms'    => intval($_POST['available_rooms'] ?? 1),
         'contact_phone'      => trim($_POST['contact_phone'] ?? ''),
         'contact_email'      => trim($_POST['contact_email'] ?? ''),
     ];
@@ -91,7 +89,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (empty($formData['location'])) $errors['location']  = 'Location is required.';
     if (empty($formData['city']))     $errors['city']      = 'City is required.';
     if ($formData['price_min'] <= 0)  $errors['price_min'] = 'Minimum price must be greater than 0.';
-    if ($formData['available_rooms'] > $formData['total_rooms']) $errors['available_rooms'] = 'Available rooms cannot exceed total rooms.';
 
     if (empty($errors)) {
         $cols = ['owner_id', 'name'];
@@ -107,13 +104,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $cols[] = 'price_min'; $vals[] = $formData['price_min'];
         $cols[] = 'price_max'; $vals[] = $formData['price_max'] ?: null;
         $cols[] = 'accommodation_type'; $vals[] = $formData['accommodation_type'];
-        $cols[] = 'total_rooms'; $vals[] = $formData['total_rooms'];
-        $cols[] = 'available_rooms'; $vals[] = $formData['available_rooms'];
 
         if ($hasStatus) { $cols[] = 'status'; $vals[] = $defaultStatus; }
         if ($hasContactPhone) { $cols[] = 'contact_phone'; $vals[] = $formData['contact_phone']; }
         if ($hasContactEmail) { $cols[] = 'contact_email'; $vals[] = $formData['contact_email']; }
-        if ($hasApprovalStatusCol) { $cols[] = 'approval_status'; $vals[] = 'pending'; }
+        if ($hasApprovalStatusCol) { $cols[] = 'approval_status'; $vals[] = 'approved'; }
+
+        // If room counts are present, initialize to 0 so new listings don't show as 1/1 by default.
+        if ($hasTotalRooms) { $cols[] = 'total_rooms'; $vals[] = 0; }
+        if ($hasAvailableRooms) { $cols[] = 'available_rooms'; $vals[] = 0; }
 
         $placeholders = implode(',', array_fill(0, count($cols), '?'));
         $sql = "INSERT INTO boarding_houses (" . implode(',', $cols) . ") VALUES ($placeholders)";
@@ -163,7 +162,7 @@ require_once __DIR__ . '/../../includes/header.php';
 <div class="dash-shell">
   <aside class="dash-sidebar">
     <a class="dash-brand" href="dashboard.php" aria-label="<?= sanitize(SITE_NAME) ?>">
-      <span class="dash-logo-wrap"><img class="dash-logo" src="<?= SITE_URL ?>/bh_finder-logo.png" alt="<?= sanitize(SITE_NAME) ?> logo"></span>
+      <span class="dash-logo-wrap"><img class="dash-logo" src="<?= SITE_URL ?>/boardease-logo.png" alt="<?= sanitize(SITE_NAME) ?> logo"></span>
       <span class="sr-only"><?= sanitize(SITE_NAME) ?></span>
     </a>
 
@@ -174,24 +173,11 @@ require_once __DIR__ . '/../../includes/header.php';
 
     <nav class="dash-nav">
       <a href="dashboard.php"><i class="fas fa-gauge"></i> Overview</a>
-      <a class="active" href="add_listing.php"><i class="fas fa-plus"></i> Add Listing</a>
-      <a href="inquiries.php"><i class="fas fa-envelope"></i> Inquiries</a>
+      <a href="rooms.php"><i class="fas fa-door-open"></i> Rooms</a>
+      <a href="chats.php"><i class="fas fa-comments"></i> Chats</a>
       <a href="<?= SITE_URL ?>/index.php"><i class="fas fa-house"></i> Browse</a>
     </nav>
 
-    <div class="dash-sidebar-footer">
-      <div class="dash-me">
-        <div class="dash-avatar"><?= strtoupper(substr(sanitize($me['full_name'] ?? 'U'), 0, 1)) ?></div>
-        <div>
-          <strong style="display:block;font-size:.92rem"><?= sanitize($me['full_name'] ?? 'Owner') ?></strong>
-          <small><?= sanitize($me['email'] ?? '') ?></small>
-        </div>
-      </div>
-
-      <div class="dash-nav" style="margin-top:6px">
-        <a href="<?= SITE_URL ?>/logout.php"><i class="fas fa-right-from-bracket"></i> Logout</a>
-      </div>
-    </div>
   </aside>
 
   <div class="dash-main">
@@ -302,15 +288,7 @@ require_once __DIR__ . '/../../includes/header.php';
           </div>
         </div>
         <div class="form-row">
-          <div class="form-group">
-            <label class="form-label">Total Rooms</label>
-            <input type="number" name="total_rooms" class="form-control" value="<?= intval($formData['total_rooms']) ?>" min="1" required>
-          </div>
-          <div class="form-group">
-            <label class="form-label">Available Rooms</label>
-            <input type="number" name="available_rooms" class="form-control <?= isset($errors['available_rooms'])?'error':'' ?>" value="<?= intval($formData['available_rooms']) ?>" min="0">
-            <?php if (isset($errors['available_rooms'])): ?><p class="form-error"><i class="fas fa-exclamation-circle"></i><?= $errors['available_rooms'] ?></p><?php endif; ?>
-          </div>
+          <p class="text-muted text-sm" style="margin:0">Room count and availability are managed in <a href="rooms.php">Room Management</a>.</p>
         </div>
       </div>
     </div>
@@ -385,6 +363,8 @@ require_once __DIR__ . '/../../includes/header.php';
 </div>
 
 <?php require_once __DIR__ . '/../../includes/footer.php'; ?>
+
+
 
 
 

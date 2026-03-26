@@ -58,7 +58,7 @@ function adminSidebar(string $active): void {
     ?>
     <aside class="dash-sidebar">
         <a class="dash-brand" href="dashboard.php" aria-label="<?= sanitize(SITE_NAME) ?>">
-            <span class="dash-logo-wrap"><img class="dash-logo" src="<?= SITE_URL ?>/bh_finder-logo.png" alt="<?= sanitize(SITE_NAME) ?> logo"></span>
+            <span class="dash-logo-wrap"><img class="dash-logo" src="<?= SITE_URL ?>/boardease-logo.png" alt="<?= sanitize(SITE_NAME) ?> logo"></span>
             <span class="sr-only"><?= sanitize(SITE_NAME) ?></span>
         </a>
 
@@ -94,7 +94,16 @@ function adminSidebar(string $active): void {
 }
 
 function adminTopbar(): void {
+    global $db;
     $me = getCurrentUser();
+
+    // Notification badge: open reports (best-effort)
+    $openReports = 0;
+    try {
+        $openReports = intval($db->query("SELECT COUNT(*) FROM reports WHERE status = 'open'")->fetchColumn() ?: 0);
+    } catch (Throwable $e) {
+        $openReports = 0;
+    }
     ?>
     <div class="dash-topbar">
         <div class="dash-search" aria-label="Search">
@@ -103,22 +112,43 @@ function adminTopbar(): void {
         </div>
 
         <div class="dash-top-actions">
-            <button class="dash-icon-btn" type="button" title="Notifications" aria-label="Notifications">
+            <a class="dash-icon-btn" href="reports.php" title="Reports" aria-label="Reports">
                 <i class="far fa-bell"></i>
+                <?php if ($openReports > 0): ?>
+                    <span class="dash-icon-badge"><?= $openReports > 99 ? "99+" : intval($openReports) ?></span>
+                <?php endif; ?>
+            </a>
+
+            <div class="nav-user">
+            <button class="user-btn" id="userBtn" type="button">
+                <span class="user-avatar"><?= strtoupper(substr(sanitize($me['full_name'] ?? 'A'), 0, 1)) ?></span>
+                <span><?= sanitize($me['full_name'] ?? 'Admin') ?></span>
+                <i class="fas fa-chevron-down" style="font-size:0.7rem;color:var(--text-light)"></i>
             </button>
 
-            <div class="dash-user" aria-label="Account">
-                <div class="dash-avatar"><?= strtoupper(substr(sanitize($me['full_name'] ?? 'A'), 0, 1)) ?></div>
-                <div class="dash-user-meta">
-                    <strong><?= sanitize($me['full_name'] ?? 'Admin') ?></strong>
-                    <span>Admin</span>
+            <div class="user-dropdown" id="userDropdown">
+                <div class="dropdown-header">
+                    <strong><?= sanitize($me['full_name'] ?? '') ?></strong>
+                    <span><?= sanitize($me['email'] ?? '') ?></span>
+                    <span class="role-badge role-admin">Admin</span>
                 </div>
-                <i class="fas fa-chevron-down" style="font-size:.75rem;color:#9CA3AF"></i>
+
+                <a href="dashboard.php"><i class="fas fa-gauge"></i> Dashboard</a>
+                <a href="users.php"><i class="fas fa-users"></i> Users</a>
+                <a href="listings.php"><i class="fas fa-building"></i> Listings</a>
+                <a href="reports.php"><i class="fas fa-flag"></i> Reports</a>
+                <hr>
+
+                <a href="<?= SITE_URL ?>/index.php"><i class="fas fa-house"></i> Back to site</a>
+                <a class="logout-link" href="<?= SITE_URL ?>/logout.php"><i class="fas fa-right-from-bracket"></i> Logout</a>
             </div>
+        </div>
         </div>
     </div>
     <?php
 }
+
+
 
 
 

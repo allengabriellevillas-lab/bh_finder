@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 // includes/config.php - Configuration & Database Connection
 
 define('DB_HOST', 'localhost');
@@ -80,6 +80,11 @@ function isOwner(): bool {
     return isset($_SESSION['user_role']) && $_SESSION['user_role'] === 'owner';
 }
 
+
+function isTenant(): bool {
+    return isset($_SESSION['user_role']) && $_SESSION['user_role'] === 'tenant';
+}
+
 function isAdmin(): bool {
     return isset($_SESSION['user_role']) && $_SESSION['user_role'] === 'admin';
 }
@@ -121,6 +126,15 @@ function requireOwner(): void {
         }
     } catch (Throwable $e) {
         // Ignore for compatibility with older schemas.
+    }
+}
+
+
+function requireTenant(): void {
+    requireLogin();
+    if (!isTenant()) {
+        header('Location: ' . SITE_URL . '/index.php?error=access_denied');
+        exit;
     }
 }
 
@@ -203,8 +217,10 @@ function sanitize(mixed $input): string {
 
 // Format currency
 function formatPrice(float $price): string {
-    return 'â‚±' . number_format($price, 2);
+    // Use HTML entity for robustness across file/DB encodings.
+    return '&#8369;' . number_format($price, 2);
 }
+
 
 // Upload image helper
 function uploadImage(array $file, string $prefix = 'img'): string|false {

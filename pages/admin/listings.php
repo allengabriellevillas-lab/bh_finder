@@ -3,7 +3,7 @@ require_once __DIR__ . '/_common.php';
 
 $pageTitle = 'Listing Management';
 
-$hasApproval = adminTableHasColumn($db, 'boarding_houses', 'approval_status');
+$hasApproval = false; // Listing approval is disabled; admins verify owner accounts instead.
 $hasApprovedBy = adminTableHasColumn($db, 'boarding_houses', 'approved_by');
 $hasApprovedAt = adminTableHasColumn($db, 'boarding_houses', 'approved_at');
 $hasRejectedReason = adminTableHasColumn($db, 'boarding_houses', 'rejected_reason');
@@ -12,26 +12,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
     $id = intval($_POST['id'] ?? 0);
     if ($id > 0) {
-        if ($action === 'approve' && $hasApproval) {
-            $stmt = $db->prepare("UPDATE boarding_houses SET approval_status='approved', rejected_reason=NULL" . ($hasApprovedBy ? ", approved_by=?" : "") . ($hasApprovedAt ? ", approved_at=NOW()" : "") . " WHERE id=?");
-            $params = [];
-            if ($hasApprovedBy) $params[] = intval($_SESSION['user_id']);
-            $params[] = $id;
-            $stmt->execute($params);
-            adminLog($db, 'listing_approved', 'boarding_houses', $id);
-            setFlash('success', 'Listing approved.');
-        } elseif ($action === 'reject' && $hasApproval) {
-            $reason = trim((string)($_POST['reason'] ?? ''));
-            if ($reason === '') $reason = 'Rejected by admin.';
-            $stmt = $db->prepare("UPDATE boarding_houses SET approval_status='rejected'" . ($hasRejectedReason ? ", rejected_reason=?" : "") . ($hasApprovedBy ? ", approved_by=?" : "") . ($hasApprovedAt ? ", approved_at=NOW()" : "") . " WHERE id=?");
-            $params = [];
-            if ($hasRejectedReason) $params[] = $reason;
-            if ($hasApprovedBy) $params[] = intval($_SESSION['user_id']);
-            $params[] = $id;
-            $stmt->execute($params);
-            adminLog($db, 'listing_rejected', 'boarding_houses', $id, ['reason' => $reason]);
-            setFlash('success', 'Listing rejected.');
-        } elseif ($action === 'toggle_status') {
+        if ($action === 'toggle_status') {
             $to = ($_POST['to'] ?? 'active') === 'inactive' ? 'inactive' : 'active';
             $stmt = $db->prepare("UPDATE boarding_houses SET status=? WHERE id=?");
             $stmt->execute([$to, $id]);
@@ -49,7 +30,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 $statusFilter = trim($_GET['status'] ?? '');
-$approvalFilter = trim($_GET['approval'] ?? '');
 $search = trim($_GET['q'] ?? '');
 
 $where = ['1=1'];
@@ -57,10 +37,6 @@ $params = [];
 if ($statusFilter !== '') {
     $where[] = 'bh.status = ?';
     $params[] = $statusFilter;
-}
-if ($hasApproval && $approvalFilter !== '') {
-    $where[] = 'bh.approval_status = ?';
-    $params[] = $approvalFilter;
 }
 if ($search !== '') {
     $where[] = '(bh.name LIKE ? OR bh.city LIKE ? OR u.email LIKE ? OR u.full_name LIKE ?)';
@@ -71,7 +47,6 @@ if ($search !== '') {
 }
 
 $cols = "bh.id, bh.name, bh.city, bh.status, bh.created_at, u.full_name AS owner_name, u.email AS owner_email";
-if ($hasApproval) $cols .= ", bh.approval_status";
 if ($hasRejectedReason) $cols .= ", bh.rejected_reason";
 
 $sql = "SELECT $cols
@@ -118,14 +93,6 @@ require_once __DIR__ . '/../../includes/header.php';
               <option value="full" <?= $statusFilter==='full'?'selected':'' ?>>Full</option>
               <option value="inactive" <?= $statusFilter==='inactive'?'selected':'' ?>>Inactive</option>
             </select>
-            <?php if ($hasApproval): ?>
-              <select name="approval" class="form-control">
-                <option value="">All approvals</option>
-                <option value="pending" <?= $approvalFilter==='pending'?'selected':'' ?>>Pending</option>
-                <option value="approved" <?= $approvalFilter==='approved'?'selected':'' ?>>Approved</option>
-                <option value="rejected" <?= $approvalFilter==='rejected'?'selected':'' ?>>Rejected</option>
-              </select>
-            <?php endif; ?>
             <div class="filter-row">
               <button class="btn btn-ghost btn-sm" type="submit"><i class="fas fa-filter"></i> Filter</button>
               <a class="btn btn-ghost btn-sm" href="listings.php"><i class="fas fa-rotate-left"></i> Reset</a>
@@ -141,7 +108,6 @@ require_once __DIR__ . '/../../includes/header.php';
                   <th>Listing</th>
                   <th>Owner</th>
                   <th>Status</th>
-                  <?php if ($hasApproval): ?><th>Approval</th><?php endif; ?>
                   <th>Created</th>
                   <th style="width:360px">Actions</th>
                 </tr>
@@ -150,7 +116,6 @@ require_once __DIR__ . '/../../includes/header.php';
               <?php foreach ($rows as $r):
                 $id = intval($r['id'] ?? 0);
                 $status = (string)($r['status'] ?? 'active');
-                $approval = $hasApproval ? (string)($r['approval_status'] ?? 'approved') : 'approved';
               ?>
                 <tr>
                   <td>
@@ -164,17 +129,6 @@ require_once __DIR__ . '/../../includes/header.php';
                   <td>
                     <span class="badge" style="background:var(--bg);border:1px solid var(--border)"><?= sanitize($status) ?></span>
                   </td>
-                  <?php if ($hasApproval): ?>
-                    <td>
-                      <?php
-                        $aStyle = $approval === 'approved' ? 'background:rgba(27,122,74,0.12);color:var(--success)' : ($approval === 'rejected' ? 'background:var(--error-bg);color:var(--error)' : 'background:var(--warning-bg);color:var(--warning)');
-                      ?>
-                      <span class="badge" style="<?= $aStyle ?>"><?= sanitize($approval) ?></span>
-                      <?php if ($approval === 'rejected' && $hasRejectedReason && !empty($r['rejected_reason'])): ?>
-                        <div class="text-muted text-xs" style="margin-top:6px">Reason: <?= sanitize($r['rejected_reason']) ?></div>
-                      <?php endif; ?>
-                    </td>
-                  <?php endif; ?>
                   <td class="text-muted text-sm"><?= sanitize(date('M d, Y', strtotime((string)($r['created_at'] ?? '')))) ?></td>
                   <td>
                     <div class="flex flex-wrap gap-2">
@@ -190,24 +144,7 @@ require_once __DIR__ . '/../../includes/header.php';
                         </button>
                       </form>
 
-                      <?php if ($hasApproval && $approval !== 'approved'): ?>
-                        <form method="POST" action="" style="display:inline">
-                          <input type="hidden" name="action" value="approve">
-                          <input type="hidden" name="id" value="<?= $id ?>">
-                          <button class="btn btn-primary btn-sm" type="submit"><i class="fas fa-check"></i> Approve</button>
-                        </form>
-                      <?php endif; ?>
 
-                      <?php if ($hasApproval && $approval !== 'rejected'): ?>
-                        <form method="POST" action="" style="display:inline">
-                          <input type="hidden" name="action" value="reject">
-                          <input type="hidden" name="id" value="<?= $id ?>">
-                          <input type="hidden" name="reason" value="Rejected by admin.">
-                          <button class="btn btn-ghost btn-sm" type="submit" data-confirm="Reject this listing?">
-                            <i class="fas fa-ban"></i> Reject
-                          </button>
-                        </form>
-                      <?php endif; ?>
 
                       <form method="POST" action="" style="display:inline">
                         <input type="hidden" name="action" value="delete">
@@ -222,11 +159,6 @@ require_once __DIR__ . '/../../includes/header.php';
             </table>
           </div>
 
-          <?php if ($hasApproval): ?>
-          <div class="text-muted text-xs mt-3">
-            Tip: new owner listings can be created as <strong>pending</strong> and must be approved to show publicly.
-          </div>
-          <?php endif; ?>
         </div>
       </div>
     </main>
