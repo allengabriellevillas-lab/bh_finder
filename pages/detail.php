@@ -55,22 +55,67 @@ if ($hasViews) {
 }
 
 $currentUser = isLoggedIn() ? getCurrentUser() : null;
+$isFavorite = false;
+if (isLoggedIn()) {
+    try {
+        $favStmt = $db->prepare("SELECT 1 FROM favorites WHERE user_id = ? AND boarding_house_id = ? LIMIT 1");
+        $favStmt->execute([intval($_SESSION['user_id']), $id]);
+        $isFavorite = (bool)$favStmt->fetchColumn();
+    } catch (Throwable $e) {
+        $isFavorite = false;
+    }
+}
 
 $imagesStmt = $db->prepare("SELECT * FROM boarding_house_images WHERE boarding_house_id = ? ORDER BY is_cover DESC, uploaded_at DESC");
 $imagesStmt->execute([$id]);
 $images = $imagesStmt->fetchAll() ?: [];
 
+$roomCols = [];
+try {
+    $roomCols = $db->query("SHOW COLUMNS FROM rooms")->fetchAll() ?: [];
+} catch (Throwable $e) {
+    $roomCols = [];
+}
+$roomFields = array_map(fn($r) => (string)($r['Field'] ?? ''), $roomCols);
+$hasRoomAmenities = in_array('amenities', $roomFields, true);
+$hasRoomAccommodationType = in_array('accommodation_type', $roomFields, true);
+
+$rooms = [];
+$roomRequestsByRoom = [];
+try {
+    $roomSql = "SELECT id, room_name, price, capacity, current_occupants, status" . ($hasRoomAccommodationType ? ", accommodation_type" : "") . ($hasRoomAmenities ? ", amenities" : "") . (in_array('room_image', $roomFields, true) ? ", room_image" : "") . "
+      FROM rooms
+      WHERE boarding_house_id = ?
+      ORDER BY price ASC, id ASC";
+    $roomsStmt = $db->prepare($roomSql);
+    $roomsStmt->execute([$id]);
+    $rooms = $roomsStmt->fetchAll() ?: [];
+
+    if (isLoggedIn() && isTenant()) {
+        $reqStmt = $db->prepare("SELECT room_id, status
+          FROM room_requests
+          WHERE tenant_id = ?
+            AND room_id IN (SELECT id FROM rooms WHERE boarding_house_id = ?)");
+        $reqStmt->execute([intval($_SESSION['user_id']), $id]);
+        foreach (($reqStmt->fetchAll() ?: []) as $reqRow) {
+            $roomRequestsByRoom[intval($reqRow['room_id'] ?? 0)] = (string)($reqRow['status'] ?? '');
+        }
+    }
+} catch (Throwable $e) {
+    $rooms = [];
+    $roomRequestsByRoom = [];
+}
+
 $amenitiesStmt = $db->prepare("SELECT a.* FROM amenities a JOIN boarding_house_amenities bha ON bha.amenity_id = a.id WHERE bha.boarding_house_id = ?");
 $amenitiesStmt->execute([$id]);
 $amenities = $amenitiesStmt->fetchAll() ?: [];
 
-$typeLabels = ['solo_room' => 'Solo Room', 'shared_room' => 'Shared Room', 'studio' => 'Studio', 'apartment' => 'Apartment'];
+$typeLabels = ['solo_room' => 'Solo Room', 'shared_room' => 'Shared Room', 'studio' => 'Studio', 'apartment' => 'Apartment', 'bedspace' => 'Bedspace', 'entire_unit' => 'Entire Unit'];
 
 $bhName = (string)($bh['name'] ?? 'Listing');
 $bhLocation = trim((string)($bh['location'] ?? ($bh['address'] ?? '')));
 $bhCity = trim((string)($bh['city'] ?? ''));
 $bhFullLocation = trim($bhLocation . (($bhLocation !== '' && $bhCity !== '') ? ', ' : '') . $bhCity);
-$bhType = (string)($bh['accommodation_type'] ?? '');
 $bhStatus = (string)($bh['status'] ?? 'active');
 $bhAvailableRooms = intval($bh['available_rooms'] ?? 0);
 $bhTotalRooms = intval($bh['total_rooms'] ?? 0);
@@ -78,7 +123,7 @@ $bhPriceMin = (float)($bh['price_min'] ?? 0);
 $bhPriceMax = $bh['price_max'] ?? null;
 $bhContactPhone = trim((string)($bh['contact_phone'] ?? ($bh['owner_phone'] ?? '')));
 $bhContactEmail = trim((string)($bh['contact_email'] ?? ($bh['owner_email'] ?? '')));
-$ownerName = (string)($bh['owner_name'] ?? 'Owner');
+$ownerName = (string)($bh['owner_name'] ?? 'Property Owner');
 $ownerSince = (string)($bh['owner_since'] ?? '');
 $bhMapQuery = $bhFullLocation !== '' ? rawurlencode($bhFullLocation) : '';
 $bhMapEmbedUrl = $bhMapQuery !== '' ? ("https://www.google.com/maps?q={$bhMapQuery}&output=embed") : '';
@@ -155,9 +200,6 @@ require_once __DIR__ . '/../includes/header.php';
           <h1 class="detail-title"><?= sanitize($bhName) ?></h1>
           <div class="detail-location"><i class="fas fa-map-marker-alt" style="color:var(--primary)"></i><?= sanitize($bhFullLocation) ?></div>
         </div>
-        <span class="property-badge <?= $bhType ? ('badge-' . str_replace('_', '-', $bhType)) : '' ?>" style="position:static;font-size:.85rem;padding:6px 16px">
-          <?= sanitize($typeLabels[$bhType] ?? ($bhType ? ucfirst($bhType) : 'Listing')) ?>
-        </span>
       </div>
 
       <div class="detail-price">
@@ -215,6 +257,111 @@ require_once __DIR__ . '/../includes/header.php';
         </div>
       <?php endif; ?>
 
+      <div class="detail-section" id="rooms">
+        <h2 class="detail-section-title"><i class="fas fa-door-open" style="color:var(--primary)"></i> Available Rooms</h2>
+
+        <?php if (empty($rooms)): ?>
+          <div class="empty-state compact" style="background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);">
+            <i class="fas fa-bed"></i>
+            <h3>No rooms listed yet</h3>
+            <p>The owner has not added room details for this property yet.</p>
+          </div>
+        <?php else: ?>
+          <div class="room-grid">
+            <?php foreach ($rooms as $room):
+              $roomId = intval($room['id'] ?? 0);
+              $capacity = max(1, intval($room['capacity'] ?? 1));
+              $currentOccupants = max(0, intval($room['current_occupants'] ?? 0));
+              if ($currentOccupants > $capacity) $currentOccupants = $capacity;
+              $roomStatus = ($room['status'] ?? '') === 'occupied' || $currentOccupants >= $capacity ? 'occupied' : 'available';
+              $requestStatus = $roomRequestsByRoom[$roomId] ?? '';
+              $roomTypeValue = trim((string)($room['accommodation_type'] ?? ''));
+              $roomAmenities = [];
+              if ($hasRoomAmenities && !empty($room['amenities'])) {
+                  $roomAmenities = preg_split('/[\r\n,]+/', (string)$room['amenities']) ?: [];
+                  $roomAmenities = array_values(array_filter(array_map('trim', $roomAmenities), fn($v) => $v !== ''));
+              }
+              $roomImageUrl = !empty($room['room_image']) ? (UPLOAD_URL . sanitize($room['room_image'])) : null;
+            ?>
+              <article class="room-card <?= $roomStatus === 'occupied' ? 'is-occupied' : 'is-available' ?>">
+                <?php if ($roomImageUrl): ?>
+                  <div class="room-card-image">
+                    <img src="<?= $roomImageUrl ?>" alt="<?= sanitize($room['room_name'] ?? ('Room ' . $roomId)) ?>">
+                  </div>
+                <?php endif; ?>
+                <div class="room-card-head">
+                  <div>
+                    <h3 class="room-card-title"><?= sanitize($room['room_name'] ?? ('Room ' . $roomId)) ?></h3>
+                    <?php if ($hasRoomAccommodationType && $roomTypeValue !== ''): ?>
+                      <div class="room-card-type"><?= sanitize($typeLabels[$roomTypeValue] ?? ucwords(str_replace('_', ' ', $roomTypeValue))) ?></div>
+                    <?php endif; ?>
+                    <div class="room-card-meta">
+                      <span><i class="fas fa-user-group"></i> Good for <?= $capacity ?></span>
+                      <span><i class="fas fa-users"></i> <?= $currentOccupants ?>/<?= $capacity ?> occupied</span>
+                    </div>
+                  </div>
+                  <span class="badge <?= $roomStatus === 'occupied' ? 'status-full' : 'status-active' ?>">
+                    <?= $roomStatus === 'occupied' ? 'Occupied' : 'Available' ?>
+                  </span>
+                </div>
+
+                <div class="room-card-price">
+                  <?= formatPrice((float)($room['price'] ?? 0)) ?>
+                  <small>/month</small>
+                </div>
+
+                <div class="room-card-amenities">
+                  <?php if (!empty($roomAmenities)): ?>
+                    <?php foreach ($roomAmenities as $roomAmenity): ?>
+                      <span class="amenity-chip"><i class="fas fa-check"></i><?= sanitize($roomAmenity) ?></span>
+                    <?php endforeach; ?>
+                  <?php elseif (!empty($amenities)): ?>
+                    <?php foreach (array_slice($amenities, 0, 4) as $propertyAmenity): ?>
+                      <span class="amenity-chip"><i class="fas fa-check"></i><?= sanitize($propertyAmenity['name'] ?? '') ?></span>
+                    <?php endforeach; ?>
+                  <?php else: ?>
+                    <span class="text-muted text-sm">No room amenities listed yet.</span>
+                  <?php endif; ?>
+                </div>
+
+                <div class="room-card-actions">
+                  <?php if ($roomStatus === 'available' && isLoggedIn() && isTenant() && intval($bh['owner_id'] ?? 0) !== intval($_SESSION['user_id'] ?? 0)): ?>
+                    <?php if ($requestStatus === 'pending'): ?>
+                      <button class="btn btn-ghost btn-sm" type="button" disabled><i class="fas fa-hourglass-half"></i> Request Pending</button>
+                    <?php elseif ($requestStatus === 'approved'): ?>
+                      <button class="btn btn-ghost btn-sm" type="button" disabled><i class="fas fa-circle-check"></i> Assigned to You</button>
+                    <?php else: ?>
+                      <form method="POST" action="<?= SITE_URL ?>/pages/room_request.php">
+                        <input type="hidden" name="room_id" value="<?= $roomId ?>">
+                        <input type="hidden" name="redirect" value="<?= sanitize('/pages/detail.php?id=' . $id . '#rooms') ?>">
+                        <button class="btn btn-primary btn-sm" type="submit"><i class="fas fa-paper-plane"></i> Inquire / Reserve</button>
+                      </form>
+                    <?php endif; ?>
+                  <?php elseif ($roomStatus === 'available' && !isLoggedIn()): ?>
+                    <a class="btn btn-primary btn-sm" href="<?= SITE_URL ?>/login.php?redirect=<?= urlencode('/pages/detail.php?id=' . $id . '#rooms') ?>">
+                      <i class="fas fa-lock"></i> Login to Inquire
+                    </a>
+                  <?php else: ?>
+                    <button class="btn btn-ghost btn-sm" type="button" disabled><i class="fas fa-ban"></i> Not Available</button>
+                  <?php endif; ?>
+
+                  <?php if (isLoggedIn()): ?>
+                    <form method="POST" action="<?= SITE_URL ?>/pages/favorite_toggle.php">
+                      <input type="hidden" name="bh_id" value="<?= intval($id) ?>">
+                      <input type="hidden" name="action" value="<?= $isFavorite ? 'remove' : 'add' ?>">
+                      <input type="hidden" name="redirect" value="<?= sanitize('/pages/detail.php?id=' . $id . '#rooms') ?>">
+                      <button class="btn btn-ghost btn-sm" type="submit"><i class="fas fa-heart"></i> <?= $isFavorite ? 'Saved' : 'Save Listing' ?></button>
+                    </form>
+                  <?php else: ?>
+                    <a class="btn btn-ghost btn-sm" href="<?= SITE_URL ?>/login.php?redirect=<?= urlencode('/pages/detail.php?id=' . $id . '#rooms') ?>"><i class="fas fa-heart"></i> Save Listing</a>
+                  <?php endif; ?>
+                </div>
+              </article>
+            <?php endforeach; ?>
+          </div>
+        <?php endif; ?>
+      </div>
+
       <!-- Rules -->
       <?php if (!empty($bh['rules'])): ?>
         <div class="detail-section">
@@ -257,8 +404,25 @@ require_once __DIR__ . '/../includes/header.php';
         <?php endif; ?>
 
 
+        <?php if (isLoggedIn()): ?>
+          <form method="POST" action="<?= SITE_URL ?>/pages/favorite_toggle.php" style="margin-bottom:14px">
+            <input type="hidden" name="bh_id" value="<?= intval($id) ?>">
+            <input type="hidden" name="action" value="<?= $isFavorite ? 'remove' : 'add' ?>">
+            <input type="hidden" name="redirect" value="<?= sanitize('/pages/detail.php?id=' . $id) ?>">
+            <button class="btn btn-ghost btn-block" type="submit"><i class="fas fa-heart"></i> <?= $isFavorite ? 'Remove from Favorites' : 'Save Listing to Favorites' ?></button>
+          </form>
+        <?php endif; ?>
+
         <?php if (isLoggedIn() && isTenant() && intval($bh['owner_id'] ?? 0) !== intval($_SESSION['user_id'] ?? 0)): ?>
-          <a class="btn btn-primary btn-block" style="margin-bottom:14px" href="<?= SITE_URL ?>/pages/chat.php?bh_id=<?= intval($id) ?>"><i class="fas fa-comments"></i> Chat with Owner</a>
+          <a class="btn btn-primary btn-block" style="margin-bottom:14px" href="<?= SITE_URL ?>/pages/chat.php?bh_id=<?= intval($id) ?>"><i class="fas fa-comments"></i> Chat with Property Owner</a>
+        <?php elseif (!isLoggedIn()): ?>
+          <a
+            class="btn btn-primary btn-block"
+            style="margin-bottom:14px"
+            href="<?= SITE_URL ?>/login.php?redirect=<?= urlencode('/pages/detail.php?id=' . intval($id)) ?>"
+          >
+            <i class="fas fa-lock"></i> You need to login in order to message the owner
+          </a>
         <?php endif; ?>
 
         <hr style="border:none;border-top:1px solid var(--border);margin:18px 0">

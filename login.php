@@ -4,6 +4,30 @@ if (isLoggedIn()) { header('Location: ' . SITE_URL . '/index.php'); exit; }
 $pageTitle = 'Login';
 $error = '';
 $email = '';
+
+function normalizeLoginRedirect(string $redirect, string $fallback): string {
+    $redirect = trim($redirect);
+    if ($redirect === '') return $fallback;
+
+    if (preg_match('#^https?://#i', $redirect)) {
+        $siteHost = (string)(parse_url(SITE_URL, PHP_URL_HOST) ?? '');
+        $targetHost = (string)(parse_url($redirect, PHP_URL_HOST) ?? '');
+        if ($siteHost !== '' && $targetHost !== '' && strcasecmp($siteHost, $targetHost) === 0) {
+            return $redirect;
+        }
+        return $fallback;
+    }
+
+    $basePath = rtrim((string)(parse_url(SITE_URL, PHP_URL_PATH) ?? ''), '/');
+    $redirect = '/' . ltrim($redirect, '/');
+
+    if ($basePath !== '' && $basePath !== '/' && !str_starts_with($redirect, $basePath . '/')) {
+        $redirect = $basePath . $redirect;
+    }
+
+    return $redirect;
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $email    = trim($_POST['email'] ?? '');
     $password = $_POST['password'] ?? '';
@@ -18,10 +42,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $_SESSION['user_id']   = $user['id'];
             $_SESSION['user_role'] = $user['role'];
             setFlash('success', 'Welcome back, ' . $user['full_name'] . '!');
-            $redirect = $_GET['redirect'] ?? (
+            $fallback = (
                 $user['role'] === 'admin' ? SITE_URL . '/pages/admin/dashboard.php' :
                 ($user['role'] === 'owner' ? SITE_URL . '/pages/owner/dashboard.php' : SITE_URL . '/index.php')
             );
+            $redirect = $user['role'] === 'owner'
+                ? SITE_URL . '/pages/owner/dashboard.php'
+                : normalizeLoginRedirect((string)($_GET['redirect'] ?? ''), $fallback);
             header('Location: ' . $redirect);
             exit;
         } else {
@@ -61,11 +88,11 @@ require_once __DIR__ . '/includes/header.php';
       <button type="submit" class="btn btn-primary btn-block btn-lg mt-3"><i class="fas fa-sign-in-alt"></i> Login</button>
     </form>
     <div class="auth-divider">or</div>
-    <div style="text-align:center;font-size:.875rem;color:var(--text-muted)">
+    <!-- <div style="text-align:center;font-size:.875rem;color:var(--text-muted)">
       <strong>Demo accounts:</strong><br>
-      Admin: <code>admin@demo.com</code> | Owner: <code>owner@demo.com</code> | Tenant: <code>tenant@demo.com</code><br>
+      Admin: <code>admin@demo.com</code> | Property Owner: <code>owner@demo.com</code> | Tenant: <code>tenant@demo.com</code><br>
       Password: <code>password</code>
-    </div>
+    </div> -->
     <div class="auth-footer">Don't have an account? <a href="<?= SITE_URL ?>/register.php">Sign up for free</a></div>
   </div>
 </div>

@@ -33,26 +33,9 @@ $hasApprovalStatusCol = $hasCol('approval_status');
 $hasTotalRooms = $hasCol('total_rooms');
 $hasAvailableRooms = $hasCol('available_rooms');
 
-$accommodationTypeValues = enumValuesFromColumns($bhColumns, 'accommodation_type');
-if (empty($accommodationTypeValues)) $accommodationTypeValues = ['solo_room','shared_room','studio','apartment'];
-$defaultType = $accommodationTypeValues[0] ?? 'solo_room';
-
 $statusValues = enumValuesFromColumns($bhColumns, 'status');
 if (empty($statusValues)) $statusValues = ['active','inactive'];
 $defaultStatus = in_array('active', $statusValues, true) ? 'active' : ($statusValues[0] ?? 'active');
-
-$typeLabels = [
-    'solo_room'   => 'Solo Room',
-    'shared_room' => 'Shared Room',
-    'studio'      => 'Studio',
-    'apartment'   => 'Apartment',
-    'bedspace'    => 'Bedspace',
-    'entire_unit' => 'Entire Unit',
-];
-$accommodationTypeOptions = [];
-foreach ($accommodationTypeValues as $v) {
-    $accommodationTypeOptions[$v] = $typeLabels[$v] ?? ucwords(str_replace('_', ' ', $v));
-}
 
 $formData = [
     'name'               => '',
@@ -62,7 +45,6 @@ $formData = [
     'rules'              => '',
     'price_min'          => '',
     'price_max'          => '',
-    'accommodation_type' => $defaultType,
     'contact_phone'      => $currentUser['phone'] ?? '',
     'contact_email'      => $currentUser['email'] ?? '',
 ];
@@ -70,7 +52,6 @@ $formData = [
 $allAmenities = $db->query("SELECT * FROM amenities ORDER BY name")->fetchAll();
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $submittedType = trim($_POST['accommodation_type'] ?? '');
     $formData = [
         'name'               => trim($_POST['name'] ?? ''),
         'location'           => trim($_POST['location'] ?? ''),
@@ -79,7 +60,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         'rules'              => trim($_POST['rules'] ?? ''),
         'price_min'          => floatval($_POST['price_min'] ?? 0),
         'price_max'          => floatval($_POST['price_max'] ?? 0),
-        'accommodation_type' => in_array($submittedType, $accommodationTypeValues, true) ? $submittedType : $defaultType,
         'contact_phone'      => trim($_POST['contact_phone'] ?? ''),
         'contact_email'      => trim($_POST['contact_email'] ?? ''),
     ];
@@ -103,7 +83,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $cols[] = 'rules'; $vals[] = $formData['rules'];
         $cols[] = 'price_min'; $vals[] = $formData['price_min'];
         $cols[] = 'price_max'; $vals[] = $formData['price_max'] ?: null;
-        $cols[] = 'accommodation_type'; $vals[] = $formData['accommodation_type'];
 
         if ($hasStatus) { $cols[] = 'status'; $vals[] = $defaultStatus; }
         if ($hasContactPhone) { $cols[] = 'contact_phone'; $vals[] = $formData['contact_phone']; }
@@ -195,8 +174,8 @@ require_once __DIR__ . '/../../includes/header.php';
         <div class="dash-user" aria-label="Account">
           <div class="dash-avatar"><?= strtoupper(substr(sanitize($me['full_name'] ?? 'U'), 0, 1)) ?></div>
           <div class="dash-user-meta">
-            <strong><?= sanitize($me['full_name'] ?? 'Owner') ?></strong>
-            <span>Owner</span>
+            <strong><?= sanitize($me['full_name'] ?? 'Property Owner') ?></strong>
+            <span>Property Owner</span>
           </div>
           <i class="fas fa-chevron-down" style="font-size:.75rem;color:#9CA3AF"></i>
         </div>
@@ -257,31 +236,20 @@ require_once __DIR__ . '/../../includes/header.php';
 
     <!-- Pricing & Rooms -->
     <div class="card mb-4">
-      <div class="card-header"><h2 style="font-family:var(--font-display);font-size:1.1rem;font-weight:700"><i class="fas fa-peso-sign" style="color:var(--primary)"></i> Pricing & Rooms</h2></div>
+      <div class="card-header"><h2 style="font-family:var(--font-display);font-size:1.1rem;font-weight:700"><span class="currency-icon" style="color:var(--primary)">&#8369;</span> Pricing & Rooms</h2></div>
       <div class="card-body">
-        <div class="form-group">
-          <label class="form-label">Accommodation Type <span class="required">*</span></label>
-          <div class="radio-group">
-            <?php foreach ($accommodationTypeOptions as $val => $label): ?>
-            <label class="radio-item">
-              <input type="radio" name="accommodation_type" value="<?= $val ?>" <?= $formData['accommodation_type']===$val?'checked':'' ?>>
-              <?= $label ?>
-            </label>
-            <?php endforeach; ?>
-          </div>
-        </div>
         <div class="form-row">
           <div class="form-group">
-            <label class="form-label">Minimum Price (â‚±/month) <span class="required">*</span></label>
-            <div class="input-icon"><i class="fas fa-peso-sign"></i>
+            <label class="form-label">Minimum Price (&#8369;/month) <span class="required">*</span></label>
+            <div class="input-icon"><span class="currency-icon">&#8369;</span>
               <input type="number" name="price_min" class="form-control <?= isset($errors['price_min'])?'error':'' ?>"
                      placeholder="2500" value="<?= $formData['price_min']?:'' ?>" min="1" step="0.01" required id="minPrice">
             </div>
             <?php if (isset($errors['price_min'])): ?><p class="form-error"><i class="fas fa-exclamation-circle"></i><?= $errors['price_min'] ?></p><?php endif; ?>
           </div>
           <div class="form-group">
-            <label class="form-label">Maximum Price (â‚±/month)</label>
-            <div class="input-icon"><i class="fas fa-peso-sign"></i>
+            <label class="form-label">Maximum Price (&#8369;/month)</label>
+            <div class="input-icon"><span class="currency-icon">&#8369;</span>
               <input type="number" name="price_max" class="form-control"
                      placeholder="Optional" value="<?= $formData['price_max']?:'' ?>" min="0" step="0.01" id="maxPrice">
             </div>

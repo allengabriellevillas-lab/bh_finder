@@ -20,8 +20,8 @@ try {
             bh.name AS bh_name,
             bh.city AS bh_city,
             u.full_name AS tenant_name,
-            (SELECT message FROM chat_messages m WHERE m.thread_id = t.id ORDER BY m.created_at DESC LIMIT 1) AS last_message,
-            (SELECT created_at FROM chat_messages m2 WHERE m2.thread_id = t.id ORDER BY m2.created_at DESC LIMIT 1) AS last_message_time,
+            (SELECT message FROM chat_messages m WHERE m.thread_id = t.id ORDER BY m.id DESC LIMIT 1) AS last_message,
+            (SELECT created_at FROM chat_messages m2 WHERE m2.thread_id = t.id ORDER BY m2.id DESC LIMIT 1) AS last_message_time,
             (SELECT COUNT(*) FROM chat_messages mu WHERE mu.thread_id = t.id AND mu.is_read = 0 AND mu.sender_id <> ?) AS unread_count
         FROM chat_threads t
         JOIN boarding_houses bh ON bh.id = t.boarding_house_id
@@ -83,7 +83,7 @@ require_once __DIR__ . '/../../includes/header.php';
         <div class="nav-user">
           <button class="user-btn" id="userBtn" type="button">
             <span class="user-avatar"><?= strtoupper(substr(sanitize($me['full_name'] ?? 'U'), 0, 1)) ?></span>
-            <span><?= sanitize($me['full_name'] ?? 'Owner') ?></span>
+            <span><?= sanitize($me['full_name'] ?? 'Property Owner') ?></span>
             <i class="fas fa-chevron-down" style="font-size:0.7rem;color:var(--text-light)"></i>
           </button>
 
@@ -91,7 +91,7 @@ require_once __DIR__ . '/../../includes/header.php';
             <div class="dropdown-header">
               <strong><?= sanitize($me['full_name'] ?? '') ?></strong>
               <span><?= sanitize($me['email'] ?? '') ?></span>
-              <span class="role-badge role-owner">Owner</span>
+              <span class="role-badge role-owner">Property Owner</span>
             </div>
 
             <a href="dashboard.php"><i class="fas fa-gauge"></i> Dashboard</a>
@@ -138,7 +138,7 @@ require_once __DIR__ . '/../../includes/header.php';
               <?php foreach ($threads as $t):
                 $unread = intval($t['unread_count'] ?? 0);
                 $snippet = trim((string)($t['last_message'] ?? ''));
-                if ($snippet !== '' && mb_strlen($snippet) > 90) $snippet = mb_substr($snippet, 0, 90) . '…';
+                if ($snippet !== '' && textLength($snippet) > 90) $snippet = textSlice($snippet, 0, 90) . '…';
                 $when = $t['last_message_time'] ? date('M d, H:i', strtotime((string)$t['last_message_time'])) : '';
               ?>
                 <a class="chat-thread" href="chat.php?thread_id=<?= intval($t['id']) ?>">

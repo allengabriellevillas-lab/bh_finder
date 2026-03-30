@@ -76,6 +76,8 @@ $selectedAmenityIds = $selAmStmt->fetchAll(PDO::FETCH_COLUMN);
 $existingImagesStmt = $db->prepare("SELECT * FROM boarding_house_images WHERE boarding_house_id=? ORDER BY is_cover DESC, uploaded_at DESC");
 $existingImagesStmt->execute([$id]);
 $existingImages = $existingImagesStmt->fetchAll() ?: [];
+$coverImage = $existingImages[0] ?? null;
+$galleryImages = array_values(array_filter($existingImages, fn($img) => intval($img['is_cover'] ?? 0) !== 1));
 
 $formData = $bh;
 $formData['location'] = $bh['location'] ?? ($bh['address'] ?? '');
@@ -142,6 +144,48 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             foreach ($selectedAmenityIds as $amId) $insAm->execute([$id, intval($amId)]);
         }
 
+        // Replace/remove current cover image first so owners can explicitly swap the main photo.
+        $replaceCoverUploaded = isset($_FILES['replace_cover_image'])
+            && intval($_FILES['replace_cover_image']['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_NO_FILE
+            && trim((string)($_FILES['replace_cover_image']['name'] ?? '')) !== '';
+        $removeCurrentCover = !empty($_POST['remove_cover_image']);
+        if ($replaceCoverUploaded || $removeCurrentCover) {
+            $currentCoverStmt = $db->prepare("SELECT id, image_path FROM boarding_house_images WHERE boarding_house_id = ? ORDER BY is_cover DESC, id ASC LIMIT 1");
+            $currentCoverStmt->execute([$id]);
+            $currentCover = $currentCoverStmt->fetch() ?: null;
+
+            if ($replaceCoverUploaded) {
+                $newCover = uploadImage($_FILES['replace_cover_image'], 'bh' . $id . '_cover');
+                if ($newCover === false) {
+                    throw new RuntimeException('Cover image upload failed. Please use JPG, PNG, or WebP under 5MB.');
+                }
+
+                // Replacement takes priority over the remove checkbox.
+                $removeCurrentCover = false;
+                $db->prepare("UPDATE boarding_house_images SET is_cover = 0 WHERE boarding_house_id = ?")->execute([$id]);
+
+                if ($currentCover) {
+                    $oldCoverPath = (string)($currentCover['image_path'] ?? '');
+                    $db->prepare("UPDATE boarding_house_images SET image_path = ?, is_cover = 1 WHERE id = ?")
+                       ->execute([$newCover, intval($currentCover['id'])]);
+                    if ($oldCoverPath !== '' && $oldCoverPath !== $newCover) {
+                        deleteUploadedFile($oldCoverPath);
+                    }
+                } else {
+                    $db->prepare("INSERT INTO boarding_house_images (boarding_house_id, image_path, is_cover) VALUES (?,?,1)")
+                       ->execute([$id, $newCover]);
+                }
+            } elseif ($removeCurrentCover && $currentCover) {
+                deleteUploadedFile((string)($currentCover['image_path'] ?? ''));
+                $db->prepare("DELETE FROM boarding_house_images WHERE id = ?")->execute([intval($currentCover['id'])]);
+            }
+
+            $existingImagesStmt->execute([$id]);
+            $existingImages = $existingImagesStmt->fetchAll() ?: [];
+            $coverImage = $existingImages[0] ?? null;
+            $galleryImages = array_values(array_filter($existingImages, fn($img) => intval($img['is_cover'] ?? 0) !== 1));
+        }
+
         // Upload new images
         if (!empty($_FILES['images']['name'][0])) {
             $hasPrimary = !empty($existingImages);
@@ -183,6 +227,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
             }
         }
+
+        $existingImagesStmt->execute([$id]);
+        $existingImages = $existingImagesStmt->fetchAll() ?: [];
+        $coverImage = $existingImages[0] ?? null;
+        $galleryImages = array_values(array_filter($existingImages, fn($img) => intval($img['is_cover'] ?? 0) !== 1));
 
         setFlash('success', 'Listing updated successfully!');
         header('Location: dashboard.php');
@@ -231,8 +280,8 @@ require_once __DIR__ . '/../../includes/header.php';
         <div class="dash-user" aria-label="Account">
           <div class="dash-avatar"><?= strtoupper(substr(sanitize($me['full_name'] ?? 'U'), 0, 1)) ?></div>
           <div class="dash-user-meta">
-            <strong><?= sanitize($me['full_name'] ?? 'Owner') ?></strong>
-            <span>Owner</span>
+            <strong><?= sanitize($me['full_name'] ?? 'Property Owner') ?></strong>
+            <span>Property Owner</span>
           </div>
           <i class="fas fa-chevron-down" style="font-size:.75rem;color:#9CA3AF"></i>
         </div>
@@ -352,24 +401,51 @@ require_once __DIR__ . '/../../includes/header.php';
     <div class="card mb-4">
       <div class="card-header"><h2 style="font-family:var(--font-display);font-size:1.1rem;font-weight:700">Photos</h2></div>
       <div class="card-body">
-        <?php if (!empty($existingImages)): ?>
-        <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:20px">
-          <?php foreach ($existingImages as $img): ?>
-          <div style="position:relative">
-            <img src="<?= UPLOAD_URL . sanitize($img['image_path']) ?>" style="width:100px;height:80px;object-fit:cover;border-radius:var(--radius-sm);border:2px solid <?= $img['is_cover']?'var(--primary)':'var(--border)' ?>">
-            <?php if ($img['is_cover']): ?><span style="position:absolute;bottom:4px;left:4px;background:var(--primary);color:#fff;font-size:.65rem;padding:2px 6px;border-radius:4px">Cover</span><?php endif; ?>
-            <label style="position:absolute;top:-6px;right:-6px;background:var(--error);color:#fff;border-radius:50%;width:20px;height:20px;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:.7rem">
-              <input type="checkbox" name="delete_images[]" value="<?= $img['id'] ?>" style="display:none" onchange="this.closest('div').style.opacity=this.checked?'0.4':'1'">Ã—
-            </label>
+        <?php if ($coverImage): ?>
+        <div style="margin-bottom:20px;padding:18px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg)">
+          <div class="form-label" style="margin-bottom:12px">Current Cover Photo</div>
+          <div style="display:flex;gap:18px;align-items:flex-start;flex-wrap:wrap">
+            <div style="position:relative;flex-shrink:0">
+              <img src="<?= UPLOAD_URL . sanitize($coverImage['image_path'] ?? '') ?>" style="width:210px;height:132px;object-fit:cover;border-radius:var(--radius-sm);border:2px solid var(--primary);box-shadow:var(--shadow-sm)">
+              <span style="position:absolute;bottom:8px;left:8px;background:var(--primary);color:#fff;font-size:.72rem;padding:4px 10px;border-radius:999px;font-weight:700">Cover</span>
+            </div>
+            <div style="flex:1;min-width:280px">
+              <div class="form-group" style="margin-bottom:12px">
+                <label class="form-label">Replace cover photo</label>
+                <input type="file" name="replace_cover_image" class="form-control" accept="image/jpeg,image/png,image/webp">
+              </div>
+              <label class="text-sm text-muted" style="display:inline-flex;align-items:center;gap:8px;margin-bottom:8px">
+                <input type="checkbox" name="remove_cover_image" value="1">
+                Remove current cover photo
+              </label>
+              <div class="form-hint">Upload a new image to replace the current cover, or check remove if you want to delete it.</div>
+            </div>
           </div>
-          <?php endforeach; ?>
         </div>
-        <p class="form-hint">Click Ã— to delete an image. Add new photos below.</p>
+        <?php endif; ?>
+
+        <?php if (!empty($galleryImages)): ?>
+        <div style="margin-bottom:20px">
+          <div class="form-label" style="margin-bottom:10px">Other Photos</div>
+          <div style="display:flex;flex-wrap:wrap;gap:12px">
+            <?php foreach ($galleryImages as $img): ?>
+            <div style="position:relative">
+              <img src="<?= UPLOAD_URL . sanitize($img['image_path']) ?>" style="width:110px;height:84px;object-fit:cover;border-radius:var(--radius-sm);border:2px solid var(--border);box-shadow:var(--shadow-sm)">
+              <label title="Delete this image" style="position:absolute;top:-7px;right:-7px;background:var(--error);color:#fff;border-radius:50%;width:22px;height:22px;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:.78rem;font-weight:700;box-shadow:var(--shadow-sm)">
+                <input type="checkbox" name="delete_images[]" value="<?= $img['id'] ?>" style="display:none" onchange="this.closest('div').style.opacity=this.checked?'0.35':'1'">
+                &times;
+              </label>
+            </div>
+            <?php endforeach; ?>
+          </div>
+        </div>
+        <p class="form-hint">Click × to mark an extra photo for deletion, then save your changes.</p>
         <?php endif; ?>
         <div class="file-upload" style="margin-top:12px">
           <input type="file" name="images[]" accept="image/jpeg,image/png,image/webp" multiple>
           <div class="file-upload-icon"><i class="fas fa-cloud-upload-alt"></i></div>
           <p class="file-upload-text"><strong>Add more photos</strong></p>
+          <p class="file-upload-text" style="font-size:.8rem;margin-top:4px">JPG, PNG, or WebP · Max 5MB each</p>
         </div>
       </div>
     </div>

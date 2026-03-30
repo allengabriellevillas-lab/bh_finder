@@ -4,7 +4,7 @@ requireOwner();
 
 $db = getDB();
 $user = getCurrentUser();
-$pageTitle = 'Owner Dashboard';
+$pageTitle = 'Dashboard';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = trim((string)($_POST['action'] ?? ''));
@@ -110,7 +110,7 @@ require_once __DIR__ . '/../../includes/header.php';
         <div class="nav-user">
           <button class="user-btn" id="userBtn" type="button">
             <span class="user-avatar"><?= strtoupper(substr(sanitize($me['full_name'] ?? 'U'), 0, 1)) ?></span>
-            <span><?= sanitize($me['full_name'] ?? 'Owner') ?></span>
+            <span><?= sanitize($me['full_name'] ?? 'Property Owner') ?></span>
             <i class="fas fa-chevron-down" style="font-size:0.7rem;color:var(--text-light)"></i>
           </button>
 
@@ -118,7 +118,7 @@ require_once __DIR__ . '/../../includes/header.php';
             <div class="dropdown-header">
               <strong><?= sanitize($me['full_name'] ?? '') ?></strong>
               <span><?= sanitize($me['email'] ?? '') ?></span>
-              <span class="role-badge role-owner">Owner</span>
+              <span class="role-badge role-owner">Property Owner</span>
             </div>
 
             <a href="dashboard.php"><i class="fas fa-gauge"></i> Dashboard</a>
@@ -135,11 +135,11 @@ require_once __DIR__ . '/../../includes/header.php';
     <div class="dash-content">
       <div class="dash-heading">
         <div>
-          <h1 class="dash-title">Owner Dashboard</h1>
+          <h1 class="dash-title">Dashboard</h1>
           <div class="dash-breadcrumb">
             <a href="<?= SITE_URL ?>/index.php">Home</a>
             <i class="fas fa-chevron-right" style="font-size:.7rem"></i>
-            <span>Owner</span>
+            <span>Property Owner</span>
           </div>
         </div>
       </div>

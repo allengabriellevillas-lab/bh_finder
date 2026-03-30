@@ -89,6 +89,15 @@ function isAdmin(): bool {
     return isset($_SESSION['user_role']) && $_SESSION['user_role'] === 'admin';
 }
 
+function roleLabel(?string $role): string {
+    return match (strtolower(trim((string)($role ?? '')))) {
+        'owner' => 'Property Owner',
+        'tenant' => 'Tenant',
+        'admin' => 'Admin',
+        default => trim((string)($role ?? '')),
+    };
+}
+
 function requireLogin(): void {
     if (!isLoggedIn()) {
         header('Location: ' . SITE_URL . '/login.php?redirect=' . urlencode($_SERVER['REQUEST_URI']));
@@ -114,18 +123,6 @@ function requireOwner(): void {
     if (!isOwner()) {
         header('Location: ' . SITE_URL . '/index.php?error=access_denied');
         exit;
-    }
-
-    // Owners may be required to be verified by admin before using owner tools.
-    try {
-        $u = getCurrentUser();
-        if (is_array($u) && array_key_exists('owner_verified', $u) && intval($u['owner_verified']) !== 1) {
-            setFlash('error', 'Your owner account is pending verification by an administrator.');
-            header('Location: ' . SITE_URL . '/index.php?error=owner_unverified');
-            exit;
-        }
-    } catch (Throwable $e) {
-        // Ignore for compatibility with older schemas.
     }
 }
 
@@ -213,6 +210,21 @@ function sanitize(mixed $input): string {
     if (is_bool($input)) $input = $input ? '1' : '0';
     if (!is_scalar($input)) return '';
     return htmlspecialchars(trim((string)$input), ENT_QUOTES, 'UTF-8');
+}
+
+function textLength(?string $value): int {
+    $value = (string)($value ?? '');
+    return function_exists('mb_strlen') ? mb_strlen($value) : strlen($value);
+}
+
+function textSlice(?string $value, int $start, ?int $length = null): string {
+    $value = (string)($value ?? '');
+
+    if (function_exists('mb_substr')) {
+        return $length === null ? mb_substr($value, $start) : mb_substr($value, $start, $length);
+    }
+
+    return $length === null ? substr($value, $start) : substr($value, $start, $length);
 }
 
 // Format currency

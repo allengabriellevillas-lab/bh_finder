@@ -19,8 +19,8 @@ try {
             bh.name AS bh_name,
             bh.city AS bh_city,
             u.full_name AS owner_name,
-            (SELECT message FROM chat_messages m WHERE m.thread_id = t.id ORDER BY m.created_at DESC LIMIT 1) AS last_message,
-            (SELECT created_at FROM chat_messages m2 WHERE m2.thread_id = t.id ORDER BY m2.created_at DESC LIMIT 1) AS last_message_time,
+            (SELECT message FROM chat_messages m WHERE m.thread_id = t.id ORDER BY m.id DESC LIMIT 1) AS last_message,
+            (SELECT created_at FROM chat_messages m2 WHERE m2.thread_id = t.id ORDER BY m2.id DESC LIMIT 1) AS last_message_time,
             (SELECT COUNT(*) FROM chat_messages mu WHERE mu.thread_id = t.id AND mu.is_read = 0 AND mu.sender_id <> ?) AS unread_count
         FROM chat_threads t
         JOIN boarding_houses bh ON bh.id = t.boarding_house_id
@@ -78,14 +78,14 @@ require_once __DIR__ . '/../includes/header.php';
           <?php foreach ($threads as $t):
             $unread = intval($t['unread_count'] ?? 0);
             $snippet = trim((string)($t['last_message'] ?? ''));
-            if ($snippet !== '' && mb_strlen($snippet) > 90) $snippet = mb_substr($snippet, 0, 90) . '…';
+            if ($snippet !== '' && textLength($snippet) > 90) $snippet = textSlice($snippet, 0, 90) . '…';
             $when = $t['last_message_time'] ? date('M d, H:i', strtotime((string)$t['last_message_time'])) : '';
           ?>
             <a class="chat-thread" href="<?= SITE_URL ?>/pages/chat.php?thread_id=<?= intval($t['id']) ?>">
               <div class="chat-thread-main">
                 <div class="chat-thread-title">
                   <strong><?= sanitize($t['bh_name'] ?? 'Listing') ?></strong>
-                  <span class="text-muted" style="font-size:.85rem">· <?= sanitize($t['owner_name'] ?? 'Owner') ?></span>
+                  <span class="text-muted" style="font-size:.85rem">· <?= sanitize($t['owner_name'] ?? 'Property Owner') ?></span>
                 </div>
                 <div class="chat-thread-meta">
                   <span class="text-muted text-sm"><?= sanitize($snippet !== '' ? $snippet : 'No messages yet') ?></span>

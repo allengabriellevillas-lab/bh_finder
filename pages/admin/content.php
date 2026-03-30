@@ -185,7 +185,7 @@ require_once __DIR__ . '/../../includes/header.php';
                     <tr>
                       <td>
                         <div class="font-bold"><?= sanitize($a['title'] ?? '') ?></div>
-                        <?php if (!empty($a['body'])): ?><div class="text-muted text-xs" style="margin-top:6px;white-space:pre-wrap"><?= sanitize(mb_strlen($a['body'])>140?mb_substr($a['body'],0,140).'…':$a['body']) ?></div><?php endif; ?>
+                        <?php if (!empty($a['body'])): ?><div class="text-muted text-xs" style="margin-top:6px;white-space:pre-wrap"><?= sanitize(textLength($a['body'])>140?textSlice($a['body'],0,140).'…':$a['body']) ?></div><?php endif; ?>
                       </td>
                       <td><span class="badge" style="<?= $active ? 'background:rgba(27,122,74,0.12);color:var(--success)' : 'background:var(--bg);border:1px solid var(--border);color:var(--text-muted)' ?>"><?= $active ? 'Active' : 'Hidden' ?></span></td>
                       <td class="text-muted text-sm"><?= sanitize(date('M d, Y', strtotime((string)($a['created_at'] ?? '')))) ?></td>

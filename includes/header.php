@@ -61,7 +61,7 @@ if ($showNavbar): ?>
               <div class="dropdown-header">
                 <strong><?= sanitize($currentUser['full_name'] ?? '') ?></strong>
                 <span><?= sanitize($currentUser['email'] ?? '') ?></span>
-                <span class="role-badge <?= isAdmin() ? 'role-admin' : (isOwner() ? 'role-owner' : 'role-tenant') ?>"><?= sanitize($currentUser['role'] ?? '') ?></span>
+                <span class="role-badge <?= isAdmin() ? 'role-admin' : (isOwner() ? 'role-owner' : 'role-tenant') ?>"><?= sanitize(roleLabel((string)($currentUser['role'] ?? ''))) ?></span>
               </div>
 
               <?php if (isAdmin()): ?>
@@ -76,7 +76,7 @@ if ($showNavbar): ?>
                   <hr>
                 <?php endif; ?>
               <?php if (isOwner()): ?>
-                <a href="<?= SITE_URL ?>/pages/owner/dashboard.php"><i class="fas fa-gauge"></i> Owner Dashboard</a>
+                <a href="<?= SITE_URL ?>/pages/owner/dashboard.php"><i class="fas fa-gauge"></i> Dashboard</a>
                 <a href="<?= SITE_URL ?>/pages/owner/add_listing.php"><i class="fas fa-plus"></i> Add Listing</a>
                 <hr>
               <?php endif; ?>

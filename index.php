@@ -8,6 +8,8 @@ $search   = trim($_GET['search'] ?? '');
 $city     = trim($_GET['city'] ?? '');
 $minPrice = intval($_GET['min_price'] ?? 0);
 $maxPrice = intval($_GET['max_price'] ?? 0);
+$minRooms = intval($_GET['min_rooms'] ?? 0);
+$amenityId = intval($_GET['amenity_id'] ?? 0);
 $type     = trim($_GET['type'] ?? '');
 $page     = max(1, intval($_GET['page'] ?? 1));
 $perPage  = 9;
@@ -18,7 +20,7 @@ $db = getDB();
 
 // Search & filter monitoring (best-effort)
 try {
-    if (($search !== '') || ($city !== '') || ($minPrice > 0) || ($maxPrice > 0) || ($type !== '')) {
+    if (($search !== '') || ($city !== '') || ($minPrice > 0) || ($maxPrice > 0) || ($minRooms > 0) || ($type !== '') || ($amenityId > 0)) {
         $ip = $_SERVER['REMOTE_ADDR'] ?? null;
         $uid = isLoggedIn() ? intval($_SESSION['user_id']) : null;
         $ins = $db->prepare("INSERT INTO search_logs (user_id, ip, channel, search, city, min_price, max_price, accommodation_type)
@@ -48,7 +50,9 @@ if ($hasApprovalStatus) $conditions[] = "bh.approval_status = 'approved'";
 $params = [];
 
 if ($search !== '') {
-    $conditions[] = "(bh.name LIKE ? OR bh.$addressCol LIKE ? OR bh.city LIKE ?)";
+    $conditions[] = "(bh.name LIKE ? OR bh.$addressCol LIKE ? OR bh.city LIKE ? OR CAST(bh.price_min AS CHAR) LIKE ? OR CAST(COALESCE(bh.price_max, bh.price_min) AS CHAR) LIKE ?)";
+    $params[] = "%$search%";
+    $params[] = "%$search%";
     $params[] = "%$search%";
     $params[] = "%$search%";
     $params[] = "%$search%";
@@ -59,7 +63,16 @@ if ($city !== '') {
 }
 if ($minPrice > 0) { $conditions[] = "bh.price_min >= ?"; $params[] = $minPrice; }
 if ($maxPrice > 0) { $conditions[] = "bh.price_min <= ?"; $params[] = $maxPrice; }
+if ($minRooms > 0) { $conditions[] = "bh.available_rooms >= ?"; $params[] = $minRooms; }
 if ($type !== '') { $conditions[] = "bh.accommodation_type = ?"; $params[] = $type; }
+if ($amenityId > 0) {
+    $conditions[] = "EXISTS (
+        SELECT 1
+        FROM boarding_house_amenities bha2
+        WHERE bha2.boarding_house_id = bh.id AND bha2.amenity_id = ?
+    )";
+    $params[] = $amenityId;
+}
 
 $whereClause = 'WHERE ' . implode(' AND ', $conditions);
 
@@ -68,27 +81,82 @@ $countStmt->execute($params);
 $totalCount = intval($countStmt->fetchColumn() ?: 0);
 $totalPages = max(1, (int)ceil($totalCount / $perPage));
 
-$listingsStmt = $db->prepare("
-    SELECT bh.*, u.full_name AS owner_name,
-           (SELECT pi.image_path FROM boarding_house_images pi WHERE pi.boarding_house_id = bh.id AND pi.is_cover = 1 LIMIT 1) AS primary_image,
-           (SELECT pi2.image_path FROM boarding_house_images pi2 WHERE pi2.boarding_house_id = bh.id LIMIT 1) AS first_image,
-           GROUP_CONCAT(a.name ORDER BY a.name SEPARATOR '||') AS amenity_names
-    FROM boarding_houses bh
-    JOIN users u ON u.id = bh.owner_id
-    LEFT JOIN boarding_house_amenities bha ON bha.boarding_house_id = bh.id
-    LEFT JOIN amenities a ON a.id = bha.amenity_id
-    $whereClause
-    GROUP BY bh.id
-    ORDER BY bh.created_at DESC
-    LIMIT $perPage OFFSET $offset
-");
-$listingsStmt->execute($params);
-$listings = $listingsStmt->fetchAll();
+$listings = [];
+try {
+    try {
+        $listingsStmt = $db->prepare("
+            SELECT bh.*, u.full_name AS owner_name,
+                   (SELECT pi.image_path FROM boarding_house_images pi WHERE pi.boarding_house_id = bh.id AND pi.is_cover = 1 LIMIT 1) AS primary_image,
+                   (SELECT pi2.image_path FROM boarding_house_images pi2 WHERE pi2.boarding_house_id = bh.id LIMIT 1) AS first_image,
+                   GROUP_CONCAT(a.name ORDER BY a.name SEPARATOR '||') AS amenity_names,
+                   rev.avg_rating,
+                   rev.review_count
+            FROM boarding_houses bh
+            JOIN users u ON u.id = bh.owner_id
+            LEFT JOIN boarding_house_amenities bha ON bha.boarding_house_id = bh.id
+            LEFT JOIN amenities a ON a.id = bha.amenity_id
+            LEFT JOIN (
+                SELECT boarding_house_id, AVG(rating) AS avg_rating, COUNT(*) AS review_count
+                FROM reviews
+                WHERE is_hidden = 0
+                GROUP BY boarding_house_id
+            ) rev ON rev.boarding_house_id = bh.id
+            $whereClause
+            GROUP BY bh.id
+            ORDER BY bh.created_at DESC
+            LIMIT $perPage OFFSET $offset
+        ");
+        $listingsStmt->execute($params);
+        $listings = $listingsStmt->fetchAll() ?: [];
+    } catch (Throwable $e) {
+        $listingsStmt = $db->prepare("
+            SELECT bh.*, u.full_name AS owner_name,
+                   (SELECT pi.image_path FROM boarding_house_images pi WHERE pi.boarding_house_id = bh.id AND pi.is_cover = 1 LIMIT 1) AS primary_image,
+                   (SELECT pi2.image_path FROM boarding_house_images pi2 WHERE pi2.boarding_house_id = bh.id LIMIT 1) AS first_image,
+                   GROUP_CONCAT(a.name ORDER BY a.name SEPARATOR '||') AS amenity_names
+            FROM boarding_houses bh
+            JOIN users u ON u.id = bh.owner_id
+            LEFT JOIN boarding_house_amenities bha ON bha.boarding_house_id = bh.id
+            LEFT JOIN amenities a ON a.id = bha.amenity_id
+            $whereClause
+            GROUP BY bh.id
+            ORDER BY bh.created_at DESC
+            LIMIT $perPage OFFSET $offset
+        ");
+        $listingsStmt->execute($params);
+        $listings = $listingsStmt->fetchAll() ?: [];
+    }
+} catch (Throwable $e) {
+    $listings = [];
+}
+
+foreach ($listings as &$listingRow) {
+    if (!array_key_exists('avg_rating', $listingRow)) $listingRow['avg_rating'] = null;
+    if (!array_key_exists('review_count', $listingRow)) $listingRow['review_count'] = 0;
+}
+unset($listingRow);
+
+$favoriteIds = [];
+if (isLoggedIn()) {
+    try {
+        $favStmt = $db->prepare("SELECT boarding_house_id FROM favorites WHERE user_id = ?");
+        $favStmt->execute([intval($_SESSION['user_id'])]);
+        $favoriteIds = array_map('intval', $favStmt->fetchAll(PDO::FETCH_COLUMN) ?: []);
+    } catch (Throwable $e) {
+        $favoriteIds = [];
+    }
+}
 
 $citiesWhere = "status != 'inactive'";
 if ($hasApprovalStatus) $citiesWhere .= " AND approval_status = 'approved'";
 $citiesStmt = $db->query("SELECT DISTINCT city FROM boarding_houses WHERE $citiesWhere ORDER BY city");
 $cities = $citiesStmt->fetchAll(PDO::FETCH_COLUMN) ?: [];
+$amenitiesForFilter = [];
+try {
+    $amenitiesForFilter = $db->query("SELECT id, name FROM amenities ORDER BY name ASC")->fetchAll() ?: [];
+} catch (Throwable $e) {
+    $amenitiesForFilter = [];
+}
 
 // Quick stats
 $activeWhere = "status != 'inactive'";
@@ -207,6 +275,23 @@ require_once __DIR__ . '/includes/header.php';
           <input class="form-control" id="maxPrice" name="max_price" type="number" min="0" step="1" value="<?= sanitize($maxPrice ?: '') ?>" placeholder="Any">
         </div>
 
+        <div class="filter-group">
+          <label class="filter-label" for="minRooms">Rooms Available</label>
+          <input class="form-control" id="minRooms" name="min_rooms" type="number" min="0" step="1" value="<?= sanitize($minRooms ?: '') ?>" placeholder="Any">
+        </div>
+
+        <div class="filter-group">
+          <label class="filter-label" for="amenityId">Amenity</label>
+          <select class="form-control" id="amenityId" name="amenity_id">
+            <option value="">Any amenity</option>
+            <?php foreach ($amenitiesForFilter as $filterAmenity): ?>
+              <option value="<?= intval($filterAmenity['id'] ?? 0) ?>" <?= intval($filterAmenity['id'] ?? 0) === $amenityId ? 'selected' : '' ?>>
+                <?= sanitize($filterAmenity['name'] ?? '') ?>
+              </option>
+            <?php endforeach; ?>
+          </select>
+        </div>
+
         <button class="btn btn-primary" type="submit"><i class="fas fa-filter"></i> Apply Filters</button>
         <a href="<?= SITE_URL ?>/index.php#listings" class="btn btn-ghost"><i class="fas fa-rotate-left"></i> Clear</a>
       </form>
@@ -225,13 +310,16 @@ require_once __DIR__ . '/includes/header.php';
               $amenities = !empty($l['amenity_names']) ? explode('||', $l['amenity_names']) : [];
               $display = array_slice($amenities, 0, 4);
               $extra   = max(0, count($amenities) - 4);
-              $tk = $l['accommodation_type'] ?? '';
               $status = $l['status'] ?? 'active';
               $availableRooms = intval($l['available_rooms'] ?? 0);
               $totalRooms = intval($l['total_rooms'] ?? 0);
               $locationText = trim((string)($l['location'] ?? ($l['address'] ?? '')));
               $cityText = trim((string)($l['city'] ?? ''));
               $fullLocation = trim($locationText . ($cityText !== '' ? ', ' . $cityText : ''));
+              $listingId = intval($l['id'] ?? 0);
+              $isFavorite = in_array($listingId, $favoriteIds, true);
+              $avg = $l['avg_rating'] !== null ? (float)$l['avg_rating'] : 0.0;
+              $cnt = intval($l['review_count'] ?? 0);
           ?>
           <article class="property-card">
             <div class="property-image">
@@ -241,13 +329,43 @@ require_once __DIR__ . '/includes/header.php';
                 <div class="property-image-placeholder"><i class="fas fa-building"></i><span>No Photo</span></div>
               <?php endif; ?>
 
-              <span class="property-badge <?= $typeClasses[$tk] ?? '' ?>"><?= sanitize($typeLabels[$tk] ?? ($tk ? ucfirst($tk) : 'Listing')) ?></span>
               <span class="property-status status-<?= sanitize($status) ?>"><?= $status === 'full' ? 'Full' : ($status === 'active' ? 'Available' : 'Inactive') ?></span>
+
+              <?php if (isLoggedIn()): ?>
+                <form method="POST" action="<?= SITE_URL ?>/pages/favorite_toggle.php" class="fav-form">
+                  <input type="hidden" name="bh_id" value="<?= $listingId ?>">
+                  <input type="hidden" name="action" value="<?= $isFavorite ? 'remove' : 'add' ?>">
+                  <input type="hidden" name="redirect" value="<?= sanitize('/index.php' . buildQS(['page' => $page]) . '#listings') ?>">
+                  <button
+                    type="submit"
+                    class="fav-btn <?= $isFavorite ? 'is-active' : '' ?>"
+                    title="<?= $isFavorite ? 'Remove from favorites' : 'Save to favorites' ?>"
+                    aria-label="<?= $isFavorite ? 'Remove from favorites' : 'Save to favorites' ?>"
+                  >
+                    <i class="fas fa-heart"></i>
+                  </button>
+                </form>
+              <?php else: ?>
+                <a
+                  href="<?= SITE_URL ?>/login.php?redirect=<?= urlencode('/index.php' . buildQS(['page' => $page]) . '#listings') ?>"
+                  class="fav-btn"
+                  title="Log in to save favorites"
+                  aria-label="Log in to save favorites"
+                  style="position:absolute;top:48px;right:12px"
+                >
+                  <i class="fas fa-heart"></i>
+                </a>
+              <?php endif; ?>
             </div>
 
             <div class="property-body">
               <h2 class="property-name"><?= sanitize($l['name'] ?? '') ?></h2>
               <div class="property-location"><i class="fas fa-map-marker-alt"></i><?= sanitize($fullLocation) ?></div>
+              <div class="rating-summary">
+                <i class="fas fa-star"></i>
+                <span><?= $cnt > 0 ? sanitize(number_format($avg, 1)) : '—' ?></span>
+                <small>(<?= number_format($cnt) ?>)</small>
+              </div>
               <div class="property-price">
                 <?= formatPrice((float)($l['price_min'] ?? 0)) ?>
                 <?php if (!empty($l['price_max']) && (float)$l['price_max'] > (float)($l['price_min'] ?? 0)): ?> – <?= formatPrice((float)$l['price_max']) ?><?php endif; ?>

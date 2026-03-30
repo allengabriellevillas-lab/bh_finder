@@ -5,6 +5,28 @@ requireOwner();
 $db = getDB();
 $me = getCurrentUser();
 $pageTitle = 'Room Management';
+$roomCols = [];
+try {
+    $roomCols = $db->query("SHOW COLUMNS FROM rooms")->fetchAll() ?: [];
+} catch (Throwable $e) {
+    $roomCols = [];
+}
+$roomFields = array_map(fn($r) => (string)($r['Field'] ?? ''), $roomCols);
+$hasRoomAmenities = in_array('amenities', $roomFields, true);
+$hasRoomImage = in_array('room_image', $roomFields, true);
+$hasRoomAccommodationType = in_array('accommodation_type', $roomFields, true);
+$roomStatusOptions = [
+    'available' => 'Available',
+    'occupied' => 'Occupied',
+];
+$roomTypeOptions = [
+    'solo_room' => 'Solo Room',
+    'shared_room' => 'Shared Room',
+    'bedspace' => 'Bedspace',
+    'studio' => 'Studio',
+    'apartment' => 'Apartment',
+    'entire_unit' => 'Entire Unit',
+];
 
 function syncBoardingHouseRoomStats(PDO $db, int $bhId): void {
     try {
@@ -70,35 +92,138 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $price = (float)($_POST['price'] ?? 0);
             $capacity = max(1, intval($_POST['capacity'] ?? 1));
             $current = max(0, intval($_POST['current_occupants'] ?? 0));
+            $roomAmenities = trim((string)($_POST['amenities'] ?? ''));
+            $roomType = trim((string)($_POST['accommodation_type'] ?? ''));
+            $removeRoomImage = !empty($_POST['remove_room_image']);
+            $requestedStatus = strtolower(trim((string)($_POST['status'] ?? '')));
             if ($current > $capacity) $current = $capacity;
 
             if ($roomName === '') throw new RuntimeException('Room name is required.');
             if ($price < 0) $price = 0;
+            if (!array_key_exists($requestedStatus, $roomStatusOptions)) $requestedStatus = '';
+            if (!array_key_exists($roomType, $roomTypeOptions)) $roomType = '';
 
-            $status = ($current >= $capacity) ? 'occupied' : 'available';
+            $status = ($current >= $capacity || $requestedStatus === 'occupied') ? 'occupied' : 'available';
 
             if ($action === 'add_room') {
-                $ins = $db->prepare("INSERT INTO rooms (boarding_house_id, room_name, price, capacity, current_occupants, status)
-                    VALUES (?,?,?,?,?,?)");
-                $ins->execute([$bhId, $roomName, $price, $capacity, $current, $status]);
+                if ($hasRoomAmenities || $hasRoomAccommodationType) {
+                    if ($hasRoomImage) {
+                        $roomImageName = null;
+                        if (!empty($_FILES['room_image']['name']) && is_array($_FILES['room_image'])) {
+                            $uploaded = uploadImage($_FILES['room_image'], 'room' . $bhId);
+                            if ($uploaded === false) throw new RuntimeException('Room image upload failed. Please use JPG, PNG, or WebP under 5MB.');
+                            $roomImageName = $uploaded;
+                        }
+                        $cols = ['boarding_house_id', 'room_name', 'price', 'capacity', 'current_occupants'];
+                        $vals = [$bhId, $roomName, $price, $capacity, $current];
+                        if ($hasRoomAccommodationType) { $cols[] = 'accommodation_type'; $vals[] = $roomType !== '' ? $roomType : null; }
+                        if ($hasRoomAmenities) { $cols[] = 'amenities'; $vals[] = $roomAmenities !== '' ? $roomAmenities : null; }
+                        $cols[] = 'room_image'; $vals[] = $roomImageName;
+                        $cols[] = 'status'; $vals[] = $status;
+                        $ins = $db->prepare("INSERT INTO rooms (" . implode(',', $cols) . ") VALUES (" . implode(',', array_fill(0, count($cols), '?')) . ")");
+                        $ins->execute($vals);
+                    } else {
+                        $cols = ['boarding_house_id', 'room_name', 'price', 'capacity', 'current_occupants'];
+                        $vals = [$bhId, $roomName, $price, $capacity, $current];
+                        if ($hasRoomAccommodationType) { $cols[] = 'accommodation_type'; $vals[] = $roomType !== '' ? $roomType : null; }
+                        if ($hasRoomAmenities) { $cols[] = 'amenities'; $vals[] = $roomAmenities !== '' ? $roomAmenities : null; }
+                        $cols[] = 'status'; $vals[] = $status;
+                        $ins = $db->prepare("INSERT INTO rooms (" . implode(',', $cols) . ") VALUES (" . implode(',', array_fill(0, count($cols), '?')) . ")");
+                        $ins->execute($vals);
+                    }
+                } else {
+                    if ($hasRoomImage) {
+                        $roomImageName = null;
+                        if (!empty($_FILES['room_image']['name']) && is_array($_FILES['room_image'])) {
+                            $uploaded = uploadImage($_FILES['room_image'], 'room' . $bhId);
+                            if ($uploaded === false) throw new RuntimeException('Room image upload failed. Please use JPG, PNG, or WebP under 5MB.');
+                            $roomImageName = $uploaded;
+                        }
+                        $ins = $db->prepare("INSERT INTO rooms (boarding_house_id, room_name, price, capacity, current_occupants, room_image, status)
+                            VALUES (?,?,?,?,?,?,?)");
+                        $ins->execute([$bhId, $roomName, $price, $capacity, $current, $roomImageName, $status]);
+                    } else {
+                        $ins = $db->prepare("INSERT INTO rooms (boarding_house_id, room_name, price, capacity, current_occupants, status)
+                            VALUES (?,?,?,?,?,?)");
+                        $ins->execute([$bhId, $roomName, $price, $capacity, $current, $status]);
+                    }
+                }
                 setFlash('success', 'Room added.');
             } else {
-                $chk = $db->prepare("SELECT id FROM rooms WHERE id = ? AND boarding_house_id = ? LIMIT 1");
+                $chk = $db->prepare("SELECT id" . ($hasRoomImage ? ", room_image" : "") . " FROM rooms WHERE id = ? AND boarding_house_id = ? LIMIT 1");
                 $chk->execute([$roomId, $bhId]);
-                if (!$chk->fetch()) throw new RuntimeException('Room not found.');
+                $existingRoom = $chk->fetch();
+                if (!$existingRoom) throw new RuntimeException('Room not found.');
 
-                $upd = $db->prepare("UPDATE rooms
-                  SET room_name=?, price=?, capacity=?, current_occupants=?, status=?
-                  WHERE id = ? AND boarding_house_id = ?");
-                $upd->execute([$roomName, $price, $capacity, $current, $status, $roomId, $bhId]);
+                $nextRoomImage = $hasRoomImage ? (string)($existingRoom['room_image'] ?? '') : '';
+                $newRoomImageUploaded = false;
+                if ($hasRoomImage && !empty($_FILES['room_image']['name']) && is_array($_FILES['room_image'])) {
+                    $uploaded = uploadImage($_FILES['room_image'], 'room' . $bhId);
+                    if ($uploaded === false) throw new RuntimeException('Room image upload failed. Please use JPG, PNG, or WebP under 5MB.');
+                    $nextRoomImage = $uploaded;
+                    $newRoomImageUploaded = true;
+                } elseif ($hasRoomImage && $removeRoomImage) {
+                    $nextRoomImage = '';
+                }
+
+                if ($hasRoomAmenities || $hasRoomAccommodationType) {
+                    if ($hasRoomImage) {
+                        $set = ['room_name=?', 'price=?', 'capacity=?', 'current_occupants=?'];
+                        $vals = [$roomName, $price, $capacity, $current];
+                        if ($hasRoomAccommodationType) { $set[] = 'accommodation_type=?'; $vals[] = $roomType !== '' ? $roomType : null; }
+                        if ($hasRoomAmenities) { $set[] = 'amenities=?'; $vals[] = $roomAmenities !== '' ? $roomAmenities : null; }
+                        $set[] = 'room_image=?'; $vals[] = $nextRoomImage !== '' ? $nextRoomImage : null;
+                        $set[] = 'status=?'; $vals[] = $status;
+                        $vals[] = $roomId; $vals[] = $bhId;
+                        $upd = $db->prepare("UPDATE rooms SET " . implode(', ', $set) . " WHERE id = ? AND boarding_house_id = ?");
+                        $upd->execute($vals);
+                    } else {
+                        $set = ['room_name=?', 'price=?', 'capacity=?', 'current_occupants=?'];
+                        $vals = [$roomName, $price, $capacity, $current];
+                        if ($hasRoomAccommodationType) { $set[] = 'accommodation_type=?'; $vals[] = $roomType !== '' ? $roomType : null; }
+                        if ($hasRoomAmenities) { $set[] = 'amenities=?'; $vals[] = $roomAmenities !== '' ? $roomAmenities : null; }
+                        $set[] = 'status=?'; $vals[] = $status;
+                        $vals[] = $roomId; $vals[] = $bhId;
+                        $upd = $db->prepare("UPDATE rooms SET " . implode(', ', $set) . " WHERE id = ? AND boarding_house_id = ?");
+                        $upd->execute($vals);
+                    }
+                } else {
+                    if ($hasRoomImage) {
+                        $upd = $db->prepare("UPDATE rooms
+                          SET room_name=?, price=?, capacity=?, current_occupants=?, room_image=?, status=?
+                          WHERE id = ? AND boarding_house_id = ?");
+                        $upd->execute([$roomName, $price, $capacity, $current, $nextRoomImage !== '' ? $nextRoomImage : null, $status, $roomId, $bhId]);
+                    } else {
+                        $upd = $db->prepare("UPDATE rooms
+                          SET room_name=?, price=?, capacity=?, current_occupants=?, status=?
+                          WHERE id = ? AND boarding_house_id = ?");
+                        $upd->execute([$roomName, $price, $capacity, $current, $status, $roomId, $bhId]);
+                    }
+                }
+
+                if ($hasRoomImage) {
+                    $oldRoomImage = (string)($existingRoom['room_image'] ?? '');
+                    if ($newRoomImageUploaded && $oldRoomImage !== '' && $oldRoomImage !== $nextRoomImage) {
+                        deleteUploadedFile($oldRoomImage);
+                    } elseif ($removeRoomImage && $oldRoomImage !== '') {
+                        deleteUploadedFile($oldRoomImage);
+                    }
+                }
                 setFlash('success', 'Room updated.');
             }
 
             syncBoardingHouseRoomStats($db, $bhId);
         } elseif ($action === 'delete_room') {
             $roomId = intval($_POST['room_id'] ?? 0);
+            $roomImageToDelete = '';
+            if ($hasRoomImage && $roomId > 0) {
+                $imgStmt = $db->prepare("SELECT room_image FROM rooms WHERE id = ? AND boarding_house_id = ? LIMIT 1");
+                $imgStmt->execute([$roomId, $bhId]);
+                $roomImageToDelete = (string)($imgStmt->fetchColumn() ?: '');
+            }
             $del = $db->prepare("DELETE FROM rooms WHERE id = ? AND boarding_house_id = ?");
             $del->execute([$roomId, $bhId]);
+            if ($hasRoomImage && $roomImageToDelete !== '') deleteUploadedFile($roomImageToDelete);
             setFlash('success', 'Room deleted.');
             syncBoardingHouseRoomStats($db, $bhId);
         } elseif ($action === 'assign_tenant') {
@@ -111,7 +236,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             $db->beginTransaction();
 
-            $roomQ = $db->prepare("SELECT r.id, r.boarding_house_id, r.capacity, r.current_occupants
+            $roomQ = $db->prepare("SELECT r.id, r.boarding_house_id, r.capacity, r.current_occupants, r.status
               FROM rooms r
               JOIN boarding_houses bh ON bh.id = r.boarding_house_id
               WHERE r.id = ? AND bh.owner_id = ?
@@ -123,6 +248,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $cap = max(1, intval($room['capacity'] ?? 1));
             $cur = max(0, intval($room['current_occupants'] ?? 0));
             if ($cur >= $cap) throw new RuntimeException('Room is already full.');
+            if (($room['status'] ?? '') === 'occupied') throw new RuntimeException('Room is currently marked occupied.');
 
             $tenantQ = $db->prepare("SELECT id FROM users WHERE id = ? AND role = 'tenant' AND is_active = 1 LIMIT 1");
             $tenantQ->execute([$tenantId]);
@@ -150,7 +276,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $moveInDate = $moveIn !== '' ? $moveIn : null;
 
             $db->beginTransaction();
-            $q = $db->prepare("SELECT rr.id, rr.status, rr.room_id, r.boarding_house_id, r.capacity, r.current_occupants
+            $q = $db->prepare("SELECT rr.id, rr.status, rr.room_id, r.boarding_house_id, r.capacity, r.current_occupants, r.status AS room_status
               FROM room_requests rr
               JOIN rooms r ON r.id = rr.room_id
               JOIN boarding_houses bh ON bh.id = r.boarding_house_id
@@ -169,6 +295,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $cap = intval($room['capacity'] ?? 0);
             $cur = intval($room['current_occupants'] ?? 0);
             if ($cap <= 0) $cap = intval($row['capacity'] ?? 1);
+            if (($row['room_status'] ?? '') === 'occupied' && $cur < $cap) throw new RuntimeException('Room is currently marked occupied.');
 
             if ($cur >= $cap) throw new RuntimeException('Room is already full.');
 
@@ -307,7 +434,7 @@ require_once __DIR__ . '/../../includes/header.php';
         <div class="nav-user">
           <button class="user-btn" id="userBtn" type="button">
             <span class="user-avatar"><?= strtoupper(substr(sanitize($me['full_name'] ?? 'U'), 0, 1)) ?></span>
-            <span><?= sanitize($me['full_name'] ?? 'Owner') ?></span>
+            <span><?= sanitize($me['full_name'] ?? 'Property Owner') ?></span>
             <i class="fas fa-chevron-down" style="font-size:0.7rem;color:var(--text-light)"></i>
           </button>
 
@@ -315,7 +442,7 @@ require_once __DIR__ . '/../../includes/header.php';
             <div class="dropdown-header">
               <strong><?= sanitize($me['full_name'] ?? '') ?></strong>
               <span><?= sanitize($me['email'] ?? '') ?></span>
-              <span class="role-badge role-owner">Owner</span>
+              <span class="role-badge role-owner">Property Owner</span>
             </div>
 
             <a href="dashboard.php"><i class="fas fa-gauge"></i> Dashboard</a>
@@ -344,6 +471,12 @@ require_once __DIR__ . '/../../includes/header.php';
       <main>
         <?php if ($roomsError): ?>
           <div class="flash flash-error mb-3"><i class="fas fa-exclamation-circle"></i><?= sanitize($roomsError) ?></div>
+        <?php endif; ?>
+        <?php if (!$hasRoomImage): ?>
+          <div class="flash flash-info mb-3"><i class="fas fa-circle-info"></i> Room photo upload is ready in the code, but your database still needs the <code>room_image</code> column. Run <code>install.php</code> once, or update your <code>rooms</code> table schema.</div>
+        <?php endif; ?>
+        <?php if (!$hasRoomAccommodationType): ?>
+          <div class="flash flash-info mb-3"><i class="fas fa-circle-info"></i> Room accommodation type is ready in the code, but your database still needs the <code>accommodation_type</code> column on <code>rooms</code>. Run <code>install.php</code> once to enable it.</div>
         <?php endif; ?>
 
         <?php if (empty($boardingHouses)): ?>
@@ -378,11 +511,11 @@ require_once __DIR__ . '/../../includes/header.php';
             </div>
 
             <div class="card-body">
-              <div style="border:1px solid var(--border);border-radius:var(--radius-md);padding:14px;background:var(--bg);margin-bottom:16px">
-                <form method="POST" action="rooms.php?bh_id=<?= intval($selectedBhId) ?>#rooms" class="grid" style="grid-template-columns:1.1fr 1.2fr .7fr .5fr .6fr auto;gap:10px;align-items:end">
+              <div class="room-form-panel">
+                <form method="POST" action="rooms.php?bh_id=<?= intval($selectedBhId) ?>#rooms" enctype="multipart/form-data" class="room-create-form">
                   <input type="hidden" name="action" value="add_room">
 
-                  <div class="form-group" style="margin:0">
+                  <div class="form-group">
                     <label class="form-label">Add to listing</label>
                     <select name="bh_id" class="form-control" required>
                       <option value="" disabled <?= $selectedBhId === 0 ? 'selected' : '' ?>>Select listing</option>
@@ -392,27 +525,70 @@ require_once __DIR__ . '/../../includes/header.php';
                     </select>
                   </div>
 
-                  <div class="form-group" style="margin:0">
+                  <div class="form-group">
                     <label class="form-label">Room name/number</label>
                     <input name="room_name" class="form-control" placeholder="Room 1" required>
                   </div>
 
-                  <div class="form-group" style="margin:0">
+                  <?php if ($hasRoomAccommodationType): ?>
+                    <div class="form-group">
+                      <label class="form-label">Accommodation Type</label>
+                      <select name="accommodation_type" class="form-control">
+                        <option value="">Select type</option>
+                        <?php foreach ($roomTypeOptions as $typeValue => $typeLabel): ?>
+                          <option value="<?= sanitize($typeValue) ?>"><?= sanitize($typeLabel) ?></option>
+                        <?php endforeach; ?>
+                      </select>
+                    </div>
+                  <?php endif; ?>
+
+                  <?php if ($hasRoomAmenities): ?>
+                    <div class="form-group">
+                      <label class="form-label">Amenities</label>
+                      <input name="amenities" class="form-control" placeholder="WiFi, AC, CR, Bed">
+                    </div>
+                  <?php endif; ?>
+
+                  <?php if ($hasRoomImage): ?>
+                    <div class="form-group room-create-photo">
+                      <label class="form-label">Upload photo</label>
+                      <div class="file-upload file-upload-compact">
+                        <input name="room_image" type="file" accept="image/jpeg,image/png,image/webp">
+                        <div class="file-upload-icon"><i class="fas fa-cloud-upload-alt"></i></div>
+                        <p class="file-upload-text"><strong>Click to upload</strong> or drag & drop</p>
+                        <p class="file-upload-text" style="font-size:.76rem;margin-top:4px">JPG, PNG, or WebP · Max 5MB</p>
+                      </div>
+                      <div class="file-preview room-inline-preview"></div>
+                    </div>
+                  <?php endif; ?>
+
+                  <div class="form-group">
                     <label class="form-label">Price</label>
                     <input name="price" type="number" step="0.01" min="0" class="form-control" placeholder="3500" required>
                   </div>
 
-                  <div class="form-group" style="margin:0">
+                  <div class="form-group">
                     <label class="form-label">Capacity</label>
                     <input name="capacity" type="number" min="1" class="form-control" value="1" required>
                   </div>
 
-                  <div class="form-group" style="margin:0">
+                  <div class="form-group">
                     <label class="form-label">Current</label>
                     <input name="current_occupants" type="number" min="0" class="form-control" value="0" required>
                   </div>
 
-                  <button class="btn btn-primary" type="submit"><i class="fas fa-plus"></i> Add</button>
+                  <div class="form-group">
+                    <label class="form-label">Status</label>
+                    <select name="status" class="form-control room-status-select">
+                      <?php foreach ($roomStatusOptions as $statusValue => $statusLabel): ?>
+                        <option value="<?= sanitize($statusValue) ?>"><?= sanitize($statusLabel) ?></option>
+                      <?php endforeach; ?>
+                    </select>
+                  </div>
+
+                  <div class="room-create-actions">
+                    <button class="btn btn-primary" type="submit"><i class="fas fa-plus"></i> Add</button>
+                  </div>
                 </form>
               </div>
 
@@ -513,6 +689,9 @@ require_once __DIR__ . '/../../includes/header.php';
                       <thead>
                         <tr>
                           <th>Room</th>
+                          <?php if ($hasRoomAccommodationType): ?><th>Type</th><?php endif; ?>
+                          <?php if ($hasRoomAmenities): ?><th>Amenities</th><?php endif; ?>
+                          <?php if ($hasRoomImage): ?><th>Image</th><?php endif; ?>
                           <th>Price</th>
                           <th>Capacity</th>
                           <th>Occupancy</th>
@@ -525,24 +704,114 @@ require_once __DIR__ . '/../../includes/header.php';
                           $cap = max(1, intval($r['capacity'] ?? 1));
                           $cur = max(0, intval($r['current_occupants'] ?? 0));
                           if ($cur > $cap) $cur = $cap;
-                          $status = ($cur >= $cap) ? 'occupied' : 'available';
+                          $selectedStatus = strtolower((string)($r['status'] ?? 'available'));
+                          if (!array_key_exists($selectedStatus, $roomStatusOptions)) $selectedStatus = 'available';
+                          $status = ($selectedStatus === 'occupied' || $cur >= $cap) ? 'occupied' : 'available';
                           $badgeClass = $status === 'occupied' ? 'status-full' : 'status-active';
+                          $priceValue = number_format((float)($r['price'] ?? 0), 2, '.', '');
+                          $roomTypeValue = trim((string)($r['accommodation_type'] ?? ''));
                         ?>
-                          <tr>
-                            <form method="POST" action="rooms.php?bh_id=<?= intval($selectedBhId) ?>#rooms">
+                          <tr class="room-row">
+                            <form method="POST" action="rooms.php?bh_id=<?= intval($selectedBhId) ?>#rooms" enctype="multipart/form-data">
                               <input type="hidden" name="bh_id" value="<?= intval($selectedBhId) ?>">
                               <input type="hidden" name="room_id" value="<?= intval($r['id']) ?>">
 
-                              <td><input name="room_name" class="form-control" value="<?= sanitize($r['room_name'] ?? '') ?>" required></td>
-                              <td><input name="price" type="number" step="0.01" min="0" class="form-control" value="<?= sanitize((string)($r['price'] ?? '0')) ?>" required></td>
-                              <td><input name="capacity" type="number" min="1" class="form-control" value="<?= $cap ?>" required></td>
-                              <td><input name="current_occupants" type="number" min="0" class="form-control" value="<?= $cur ?>" required></td>
-                              <td><span class="badge <?= $badgeClass ?>"><?= $status === 'occupied' ? 'Occupied' : 'Available' ?></span></td>
                               <td>
-                                <div class="flex flex-wrap gap-2">
-                                  <button class="btn btn-ghost btn-sm" type="submit" name="action" value="update_room"><i class="fas fa-floppy-disk"></i> Save</button>
-                                  <?php if ($cur < $cap): ?>
-                                    <a class="btn btn-primary btn-sm" href="rooms.php?bh_id=<?= intval($selectedBhId) ?>&assign_room_id=<?= intval($r['id']) ?>#assign"><i class="fas fa-user-plus"></i> Assign Tenant</a>
+                                <div class="room-cell-display room-text-value"><?= sanitize($r['room_name'] ?? '') ?></div>
+                                <div class="room-cell-edit">
+                                  <input name="room_name" class="form-control" value="<?= sanitize($r['room_name'] ?? '') ?>" required>
+                                </div>
+                              </td>
+                              <?php if ($hasRoomAccommodationType): ?>
+                                <td>
+                                  <div class="room-cell-display room-text-value"><?= sanitize($roomTypeOptions[$roomTypeValue] ?? 'Not set') ?></div>
+                                  <div class="room-cell-edit">
+                                    <select name="accommodation_type" class="form-control">
+                                      <option value="">Select type</option>
+                                      <?php foreach ($roomTypeOptions as $typeValue => $typeLabel): ?>
+                                        <option value="<?= sanitize($typeValue) ?>" <?= $roomTypeValue === $typeValue ? 'selected' : '' ?>><?= sanitize($typeLabel) ?></option>
+                                      <?php endforeach; ?>
+                                    </select>
+                                  </div>
+                                </td>
+                              <?php endif; ?>
+                              <?php if ($hasRoomAmenities): ?>
+                                <td>
+                                  <div class="room-cell-display room-text-value"><?= sanitize($r['amenities'] ?? 'Not set') ?></div>
+                                  <div class="room-cell-edit">
+                                    <input name="amenities" class="form-control" value="<?= sanitize($r['amenities'] ?? '') ?>" placeholder="WiFi, AC, CR">
+                                  </div>
+                                </td>
+                              <?php endif; ?>
+                              <?php if ($hasRoomImage): ?>
+                                <td class="room-table-image-cell">
+                                  <div class="room-image-stack room-cell-display">
+                                    <?php if (!empty($r['room_image'])): ?>
+                                    <div class="room-thumb-wrap room-thumb-large">
+                                      <img class="room-thumb" src="<?= UPLOAD_URL . sanitize($r['room_image'] ?? '') ?>" alt="<?= sanitize($r['room_name'] ?? 'Room') ?>">
+                                    </div>
+                                    <?php else: ?>
+                                    <span class="room-text-muted">No photo</span>
+                                    <?php endif; ?>
+                                  </div>
+                                  <div class="room-image-stack room-cell-edit">
+                                    <?php if (!empty($r['room_image'])): ?>
+                                    <div class="room-thumb-wrap room-thumb-large">
+                                      <img class="room-thumb" src="<?= UPLOAD_URL . sanitize($r['room_image'] ?? '') ?>" alt="<?= sanitize($r['room_name'] ?? 'Room') ?>">
+                                    </div>
+                                    <label class="room-image-remove">
+                                      <input type="checkbox" name="remove_room_image" value="1"> Remove
+                                    </label>
+                                    <?php endif; ?>
+                                    <div class="file-upload file-upload-compact">
+                                      <input name="room_image" type="file" accept="image/jpeg,image/png,image/webp">
+                                      <div class="file-upload-icon"><i class="fas fa-cloud-upload-alt"></i></div>
+                                      <p class="file-upload-text"><strong><?= !empty($r['room_image']) ? 'Replace photo' : 'Upload photo' ?></strong></p>
+                                      <p class="file-upload-text" style="font-size:.74rem;margin-top:4px">JPG, PNG, or WebP</p>
+                                    </div>
+                                    <div class="file-preview room-inline-preview"></div>
+                                  </div>
+                                </td>
+                              <?php endif; ?>
+                              <td>
+                                <div class="room-cell-display room-text-value"><?= sanitize($priceValue) ?></div>
+                                <div class="room-cell-edit">
+                                  <input name="price" type="number" step="0.01" min="0" class="form-control" value="<?= sanitize($priceValue) ?>" required>
+                                </div>
+                              </td>
+                              <td>
+                                <div class="room-cell-display room-text-value"><?= $cap ?></div>
+                                <div class="room-cell-edit">
+                                  <input name="capacity" type="number" min="1" class="form-control" value="<?= $cap ?>" required>
+                                </div>
+                              </td>
+                              <td>
+                                <div class="room-cell-display room-text-value"><?= $cur ?></div>
+                                <div class="room-cell-edit">
+                                  <input name="current_occupants" type="number" min="0" class="form-control" value="<?= $cur ?>" required>
+                                </div>
+                              </td>
+                              <td>
+                                <div class="room-cell-display">
+                                  <div class="room-status-chip">
+                                    <span class="badge <?= $badgeClass ?>"><?= $status === 'occupied' ? 'Occupied' : 'Available' ?></span>
+                                  </div>
+                                </div>
+                                <div class="room-cell-edit">
+                                  <select name="status" class="form-control room-status-select">
+                                    <?php foreach ($roomStatusOptions as $statusValue => $statusLabel): ?>
+                                      <option value="<?= sanitize($statusValue) ?>" <?= $selectedStatus === $statusValue ? 'selected' : '' ?>><?= sanitize($statusLabel) ?></option>
+                                    <?php endforeach; ?>
+                                  </select>
+                                </div>
+                              </td>
+                              <td>
+                                <div class="flex flex-wrap gap-2 room-row-actions">
+                                  <button class="btn btn-ghost btn-sm room-edit-toggle" type="button"><i class="fas fa-pen-to-square"></i> Update</button>
+                                  <button class="btn btn-primary btn-sm room-save-btn" type="submit" name="action" value="update_room"><i class="fas fa-floppy-disk"></i> Save</button>
+                                  <button class="btn btn-ghost btn-sm room-cancel-btn" type="button"><i class="fas fa-xmark"></i> Cancel</button>
+                                  <?php if ($cur < $cap && $status === 'available'): ?>
+                                    <a class="btn btn-primary btn-sm room-assign-btn" href="rooms.php?bh_id=<?= intval($selectedBhId) ?>&assign_room_id=<?= intval($r['id']) ?>#assign"><i class="fas fa-user-plus"></i> Assign Tenant</a>
                                   <?php endif; ?>
                                   <button class="btn btn-danger btn-sm" type="submit" name="action" value="delete_room" onclick="return confirm('Delete this room?');"><i class="fas fa-trash"></i> Delete</button>
                                 </div>

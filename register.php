@@ -28,11 +28,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $hash = password_hash($password, PASSWORD_DEFAULT);
             $stmt = $db->prepare("INSERT INTO users (full_name,email,password,role,phone) VALUES(?,?,?,?,?)");
             $stmt->execute([$formData['full_name'],$formData['email'],$hash,$formData['role'],$formData['phone']]);
-            $_SESSION['user_id']   = $db->lastInsertId();
+            $newUserId = intval($db->lastInsertId());
+            if ($formData['role'] === 'owner') {
+                try {
+                    $db->prepare("UPDATE users SET owner_verified = 1, owner_verified_at = COALESCE(owner_verified_at, NOW()) WHERE id = ?")
+                       ->execute([$newUserId]);
+                } catch (Throwable $e) {
+                    // Older schemas may not have owner verification columns.
+                }
+            }
+            $_SESSION['user_id']   = $newUserId;
             $_SESSION['user_role'] = $formData['role'];
             setFlash('success', 'Welcome to ' . SITE_NAME . '!');
-            // Owners require admin verification before using owner tools.
-            header('Location: ' . ($formData['role']==='owner' ? SITE_URL.'/index.php?info=owner_pending' : SITE_URL.'/index.php'));
+            header('Location: ' . ($formData['role']==='owner' ? SITE_URL.'/pages/owner/dashboard.php' : SITE_URL.'/index.php'));
             exit;
         }
     }
@@ -58,7 +66,7 @@ require_once __DIR__ . '/includes/header.php';
         </label>
         <label class="role-option <?= $formData['role']==='owner'?'selected':'' ?>" onclick="setRole('owner')">
           <input type="radio" name="role_display" value="owner" <?= $formData['role']==='owner'?'checked':'' ?>>
-          <i class="fas fa-building"></i><strong>Owner</strong><span>Listing a property</span>
+          <i class="fas fa-building"></i><strong>Property Owner</strong><span>Listing a property</span>
         </label>
       </div>
     </div>

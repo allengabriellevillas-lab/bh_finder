@@ -40,8 +40,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['send_message'])) {
     $msg = trim((string)($_POST['message'] ?? ''));
     if ($msg !== '') {
         try {
-            $db->prepare("INSERT INTO chat_messages (thread_id, sender_id, message) VALUES (?,?,?)")
-               ->execute([intval($thread['id']), $uid, $msg]);
+            $dedupe = $db->prepare("SELECT id
+              FROM chat_messages
+              WHERE thread_id = ? AND sender_id = ? AND message = ?
+                AND created_at >= (NOW() - INTERVAL 5 SECOND)
+              ORDER BY id DESC
+              LIMIT 1");
+            $dedupe->execute([intval($thread['id']), $uid, $msg]);
+            $existingId = intval($dedupe->fetchColumn() ?: 0);
+            if ($existingId <= 0) {
+                $db->prepare("INSERT INTO chat_messages (thread_id, sender_id, message) VALUES (?,?,?)")
+                   ->execute([intval($thread['id']), $uid, $msg]);
+            }
             $db->prepare("UPDATE chat_threads SET last_message_at = NOW() WHERE id = ?")
                ->execute([intval($thread['id'])]);
         } catch (Throwable $e) {
@@ -66,7 +76,7 @@ try {
       FROM chat_messages m
       JOIN users u ON u.id = m.sender_id
       WHERE m.thread_id = ?
-      ORDER BY m.created_at ASC
+      ORDER BY m.id ASC
       LIMIT 300");
     $stmt->execute([intval($thread['id'])]);
     $messages = $stmt->fetchAll() ?: [];
@@ -162,6 +172,7 @@ require_once __DIR__ . '/../../includes/header.php';
           <input class="form-control" type="text" name="message" placeholder="Type a message..." autocomplete="off" required>
           <button class="btn btn-primary" type="submit"><i class="fas fa-paper-plane"></i></button>
         </form>
+        <div class="chat-compose-status" aria-live="polite"></div>
       </div>
 
     </div>
@@ -170,111 +181,6 @@ require_once __DIR__ . '/../../includes/header.php';
 </div>
 
 
-<script>
-document.addEventListener('DOMContentLoaded', function () {
-  const chatBox = document.getElementById('chatBox');
-  const messagesWrap = document.querySelector('.chat-messages');
-  const form = document.querySelector('form.chat-compose');
-  const input = form ? form.querySelector('input[name="message"]') : null;
-  const sendBtn = form ? form.querySelector('button[type="submit"]') : null;
-
-  if (!chatBox || !messagesWrap || !form || !input) return;
-
-  const threadId = parseInt(chatBox.dataset.threadId || '0', 10);
-  const userId = parseInt(chatBox.dataset.userId || '0', 10);
-  const messagesUrl = chatBox.dataset.messagesUrl;
-  const sendUrl = chatBox.dataset.sendUrl;
-
-  let lastId = 0;
-  document.querySelectorAll('.chat-msg[data-mid]').forEach(el => {
-    const mid = parseInt(el.dataset.mid || '0', 10);
-    if (mid > lastId) lastId = mid;
-  });
-
-  function nearBottom() {
-    return (messagesWrap.scrollHeight - messagesWrap.scrollTop - messagesWrap.clientHeight) < 90;
-  }
-
-  function scrollToBottom() {
-    messagesWrap.scrollTop = messagesWrap.scrollHeight;
-  }
-
-  function esc(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-  }
-
-  function formatTime(iso) {
-    try {
-      const d = new Date(String(iso).replace(' ', 'T'));
-      return d.toLocaleString(undefined, { month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' });
-    } catch (e) {
-      return '';
-    }
-  }
-
-  function appendMessage(msg) {
-    if (!msg || !msg.id) return;
-    const mid = parseInt(msg.id, 10);
-    if (!mid || mid <= lastId) return;
-
-    const mine = parseInt(msg.sender_id || '0', 10) === userId;
-    const row = document.createElement('div');
-    row.className = 'chat-msg ' + (mine ? 'mine' : 'theirs');
-    row.dataset.mid = String(mid);
-    row.innerHTML = `
-      <div class="chat-bubble">
-        <div class="chat-text">${esc(msg.message || '')}</div>
-        <div class="chat-time">${esc(formatTime(msg.created_at || ''))}</div>
-      </div>
-    `;
-    messagesWrap.appendChild(row);
-    lastId = Math.max(lastId, mid);
-  }
-
-  async function poll() {
-    if (!threadId || !messagesUrl) return;
-    const shouldScroll = nearBottom();
-    try {
-      const res = await fetch(`${messagesUrl}?thread_id=${encodeURIComponent(threadId)}&since_id=${encodeURIComponent(lastId)}`, { credentials: 'same-origin' });
-      if (!res.ok) return;
-      const data = await res.json();
-      const msgs = Array.isArray(data.messages) ? data.messages : [];
-      msgs.forEach(appendMessage);
-      if (shouldScroll && msgs.length) scrollToBottom();
-    } catch (e) {
-      // ignore
-    }
-  }
-
-  form.addEventListener('submit', async function (e) {
-    e.preventDefault();
-    const text = (input.value || '').trim();
-    if (!text) return;
-    if (sendBtn) sendBtn.disabled = true;
-
-    try {
-      const fd = new FormData();
-      fd.append('thread_id', String(threadId));
-      fd.append('message', text);
-      const res = await fetch(sendUrl, { method: 'POST', body: fd, credentials: 'same-origin' });
-      const data = await res.json().catch(() => null);
-      if (res.ok && data && data.message) {
-        appendMessage(data.message);
-        input.value = '';
-        scrollToBottom();
-      }
-    } finally {
-      if (sendBtn) sendBtn.disabled = false;
-      input.focus();
-    }
-  });
-
-  scrollToBottom();
-  setInterval(poll, 2500);
-});
-</script>
 <?php require_once __DIR__ . '/../../includes/footer.php'; ?>
 
 

@@ -25,7 +25,7 @@ if ($threadId <= 0) {
 if ($message === '') {
     jsonResponse(['error' => 'Message is required'], 400);
 }
-if (mb_strlen($message) > 2000) {
+if (textLength($message) > 2000) {
     jsonResponse(['error' => 'Message too long'], 400);
 }
 
@@ -54,9 +54,20 @@ if (!$isTenantParticipant && !$isOwnerParticipant) {
 }
 
 try {
-    $ins = $db->prepare('INSERT INTO chat_messages (thread_id, sender_id, message) VALUES (?,?,?)');
-    $ins->execute([$threadId, $uid, $message]);
-    $mid = intval($db->lastInsertId() ?: 0);
+    $dedupe = $db->prepare("SELECT id
+      FROM chat_messages
+      WHERE thread_id = ? AND sender_id = ? AND message = ?
+        AND created_at >= (NOW() - INTERVAL 5 SECOND)
+      ORDER BY id DESC
+      LIMIT 1");
+    $dedupe->execute([$threadId, $uid, $message]);
+    $mid = intval($dedupe->fetchColumn() ?: 0);
+
+    if ($mid <= 0) {
+        $ins = $db->prepare('INSERT INTO chat_messages (thread_id, sender_id, message) VALUES (?,?,?)');
+        $ins->execute([$threadId, $uid, $message]);
+        $mid = intval($db->lastInsertId() ?: 0);
+    }
 
     $db->prepare('UPDATE chat_threads SET last_message_at = NOW() WHERE id = ?')->execute([$threadId]);
 

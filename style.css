@@ -619,6 +619,7 @@ textarea.form-control { min-height: 120px; resize: vertical; }
 
 .input-icon { position: relative; }
 .input-icon > i { position: absolute; left: 14px; top: 50%; transform: translateY(-50%); color: var(--text-light); font-size: 0.9rem; }
+.input-icon > .currency-icon { position: absolute; left: 14px; top: 50%; transform: translateY(-50%); color: var(--text-light); font-size: 1rem; font-weight: 700; line-height: 1; }
 .input-icon .form-control { padding-left: 40px; }
 .input-icon.has-trailing-action .form-control { padding-right: 44px; }
 
@@ -691,6 +692,69 @@ textarea.form-control { min-height: 120px; resize: vertical; }
 .file-upload-icon { font-size: 2.5rem; color: var(--border-dark); margin-bottom: 12px; }
 .file-upload-text { color: var(--text-muted); font-size: 0.9rem; }
 .file-upload-text strong { color: var(--primary); }
+
+.file-upload.file-upload-compact {
+    padding: 18px 14px;
+}
+
+.file-upload.file-upload-compact .file-upload-icon {
+    font-size: 1.5rem;
+    margin-bottom: 8px;
+}
+
+.file-upload.file-upload-compact .file-upload-text {
+    font-size: 0.82rem;
+    margin: 0;
+}
+
+.file-preview {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 12px;
+}
+
+.preview-item {
+    position: relative;
+    width: 100px;
+}
+
+.preview-item img {
+    width: 100px;
+    height: 80px;
+    object-fit: cover;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+}
+
+.preview-remove {
+    position: absolute;
+    top: -6px;
+    right: -6px;
+    background: var(--error);
+    color: #fff;
+    border: none;
+    border-radius: 999px;
+    width: 20px;
+    height: 20px;
+    cursor: pointer;
+    font-size: 0.8rem;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: var(--shadow-sm);
+}
+
+.preview-name {
+    display: block;
+    margin-top: 4px;
+    font-size: 0.7rem;
+    color: var(--text-light);
+    text-overflow: ellipsis;
+    overflow: hidden;
+    white-space: nowrap;
+}
 
 /* ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Cards ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ */
 .card {
@@ -983,16 +1047,28 @@ textarea.form-control { min-height: 120px; resize: vertical; }
     border-radius: var(--radius);
     padding: 20px 24px;
     margin-bottom: 28px;
-        max-width: 920px;
+    max-width: 1220px;
     margin-left: auto;
     margin-right: auto;
-display: flex;
+    display: flex;
     flex-wrap: wrap;
     gap: 16px;
     align-items: flex-end;
+    justify-content: space-between;
 }
 
-.filter-group { display: flex; flex-direction: column; gap: 6px; min-width: 160px; }
+.filter-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+    flex: 1 1 0;
+}
+
+.filter-bar > .btn {
+    flex: 0 0 auto;
+    white-space: nowrap;
+}
 .filter-label { font-size: 0.8rem; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
 
 /* ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Stats ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ */
@@ -1484,6 +1560,251 @@ tbody tr:last-child td { border-bottom: none; }
 .detail-section { margin-bottom: 28px; }
 .detail-section-title { font-family: var(--font-display); font-size: 1.1rem; font-weight: 700; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 2px solid var(--border); }
 
+.room-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 16px;
+}
+
+.room-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 18px;
+    box-shadow: var(--shadow-sm);
+}
+
+.room-card-image {
+    margin: -18px -18px 14px;
+    height: 170px;
+    overflow: hidden;
+    border-radius: var(--radius) var(--radius) 0 0;
+    background: linear-gradient(135deg, rgba(var(--primary-rgb), 0.12), rgba(var(--primary-rgb), 0.04));
+}
+
+.room-card-image img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.room-card.is-available { border-color: rgba(var(--primary-rgb), 0.18); }
+.room-card.is-occupied { opacity: 0.92; }
+
+.room-card-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+.room-card-title {
+    font-family: var(--font-display);
+    font-size: 1.08rem;
+    font-weight: 800;
+    margin: 0 0 6px;
+}
+
+.room-card-type {
+    display: inline-flex;
+    align-items: center;
+    padding: 5px 12px;
+    margin-bottom: 10px;
+    border-radius: 999px;
+    background: rgba(var(--primary-rgb), 0.1);
+    color: var(--primary);
+    font-size: 0.76rem;
+    font-weight: 700;
+}
+
+.room-card-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    color: var(--text-muted);
+    font-size: 0.82rem;
+}
+
+.room-card-meta span {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.room-card-price {
+    font-family: var(--font-display);
+    font-size: 1.35rem;
+    font-weight: 800;
+    color: var(--primary);
+    margin-bottom: 12px;
+}
+
+.room-card-price small {
+    font-family: var(--font-body);
+    font-size: 0.88rem;
+    color: var(--text-muted);
+    font-weight: 500;
+}
+
+.room-card-amenities {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 14px;
+}
+
+.room-card-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.room-thumb-wrap {
+    width: 82px;
+    height: 62px;
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    margin-bottom: 6px;
+}
+
+.room-thumb {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.room-form-panel {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 16px;
+    background: var(--bg);
+    margin-bottom: 16px;
+}
+
+.room-create-form {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    max-width: 100%;
+}
+
+.room-create-form .form-group {
+    margin: 0 0 14px;
+    min-width: 0;
+}
+
+.room-create-photo {
+    grid-column: auto;
+}
+
+.room-create-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+}
+
+.room-create-actions .btn {
+    min-width: 110px;
+    justify-content: center;
+}
+
+.room-table-image-cell {
+    min-width: 220px;
+}
+
+.room-image-stack {
+    display: grid;
+    gap: 8px;
+}
+
+.room-thumb-wrap.room-thumb-large {
+    width: 120px;
+    height: 86px;
+    margin-bottom: 0;
+}
+
+.room-image-remove {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-muted);
+    font-size: 0.76rem;
+}
+
+.room-image-remove input {
+    margin: 0;
+}
+
+.room-inline-preview .preview-item {
+    width: 72px;
+}
+
+.room-inline-preview .preview-item img {
+    width: 72px;
+    height: 56px;
+}
+
+.room-inline-preview .preview-name {
+    font-size: 0.66rem;
+}
+
+.room-status-select {
+    min-width: 128px;
+}
+
+.room-status-chip {
+    margin-top: 8px;
+}
+
+.room-row .room-cell-edit,
+.room-row.is-editing .room-cell-display,
+.room-row .room-save-btn,
+.room-row .room-cancel-btn {
+    display: none;
+}
+
+.room-row.is-editing .room-cell-edit {
+    display: block;
+}
+
+.room-row.is-editing .room-save-btn,
+.room-row.is-editing .room-cancel-btn {
+    display: inline-flex;
+}
+
+.room-row.is-editing .room-edit-toggle,
+.room-row.is-editing .room-assign-btn {
+    display: none;
+}
+
+.room-text-value {
+    min-height: 42px;
+    display: flex;
+    align-items: center;
+    color: var(--text);
+    font-weight: 500;
+}
+
+.room-text-muted {
+    color: var(--text-muted);
+    font-size: 0.84rem;
+}
+
+.room-row-actions {
+    align-items: flex-start;
+}
+
+@media (max-width: 980px) {
+    .room-table-image-cell {
+        min-width: 180px;
+    }
+}
+
 .map-embed {
     border: 1px solid var(--border);
     border-radius: var(--radius);
@@ -1770,6 +2091,14 @@ tbody tr:last-child td { border-bottom: none; }
 
 .chat-compose .form-control { flex: 1; }
 .chat-compose .btn { padding: 10px 16px; border-radius: 12px; }
+.chat-compose-status {
+    min-height: 22px;
+    padding: 0 14px 12px;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+.chat-compose-status.is-error { color: var(--error); }
+.chat-compose-status.is-success { color: var(--success); }
 
 @media (max-width: 768px) {
     .nav-toggle { display: flex; }

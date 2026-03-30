@@ -399,4 +399,218 @@ document.addEventListener('DOMContentLoaded', function () {
             if (current >= target) clearInterval(timer);
         }, 40);
     });
+
+    // Chat boxes
+    document.querySelectorAll('.chat-box[data-thread-id]').forEach(chatBox => {
+        const messagesWrap = chatBox.querySelector('.chat-messages');
+        const form = chatBox.querySelector('form.chat-compose');
+        const input = form ? form.querySelector('input[name="message"], textarea[name="message"]') : null;
+        const sendBtn = form ? form.querySelector('button[type="submit"]') : null;
+        const statusEl = chatBox.querySelector('.chat-compose-status');
+
+        if (!messagesWrap || !form || !input) return;
+        if (form.dataset.chatBound === '1') return;
+        form.dataset.chatBound = '1';
+
+        const threadId = parseInt(chatBox.dataset.threadId || '0', 10);
+        const userId = parseInt(chatBox.dataset.userId || '0', 10);
+        const messagesUrl = chatBox.dataset.messagesUrl || '';
+        const sendUrl = chatBox.dataset.sendUrl || '';
+        const pollMs = Math.max(parseInt(chatBox.dataset.pollMs || '2500', 10) || 2500, 1000);
+
+        let lastId = 0;
+        let isPolling = false;
+        let isSending = false;
+
+        messagesWrap.querySelectorAll('.chat-msg[data-mid]').forEach(el => {
+            const mid = parseInt(el.dataset.mid || '0', 10);
+            if (mid > lastId) lastId = mid;
+        });
+
+        function setStatus(message, isError = false) {
+            if (!statusEl) return;
+            statusEl.textContent = message || '';
+            statusEl.classList.toggle('is-error', !!message && isError);
+            statusEl.classList.toggle('is-success', !!message && !isError);
+        }
+
+        function clearEmptyState() {
+            messagesWrap.querySelectorAll('.empty-state').forEach(el => el.remove());
+        }
+
+        function nearBottom() {
+            return (messagesWrap.scrollHeight - messagesWrap.scrollTop - messagesWrap.clientHeight) < 90;
+        }
+
+        function scrollToBottom() {
+            messagesWrap.scrollTop = messagesWrap.scrollHeight;
+        }
+
+        function esc(text) {
+            const div = document.createElement('div');
+            div.textContent = text == null ? '' : String(text);
+            return div.innerHTML;
+        }
+
+        function formatText(text) {
+            return esc(text).replace(/\r?\n/g, '<br>');
+        }
+
+        function formatTime(iso) {
+            try {
+                const d = new Date(String(iso).replace(' ', 'T'));
+                if (Number.isNaN(d.getTime())) return '';
+                return d.toLocaleString(undefined, {
+                    month: 'short',
+                    day: '2-digit',
+                    hour: '2-digit',
+                    minute: '2-digit'
+                });
+            } catch (e) {
+                return '';
+            }
+        }
+
+        function appendMessage(msg) {
+            if (!msg || !msg.id) return false;
+            const mid = parseInt(msg.id, 10);
+            if (!mid || mid <= lastId) return false;
+
+            clearEmptyState();
+
+            const mine = parseInt(msg.sender_id || '0', 10) === userId;
+            const row = document.createElement('div');
+            row.className = 'chat-msg ' + (mine ? 'mine' : 'theirs');
+            row.dataset.mid = String(mid);
+            row.innerHTML = `
+                <div class="chat-bubble">
+                    <div class="chat-text">${formatText(msg.message || '')}</div>
+                    <div class="chat-time">${esc(formatTime(msg.created_at || ''))}</div>
+                </div>
+            `;
+            messagesWrap.appendChild(row);
+            lastId = Math.max(lastId, mid);
+            return true;
+        }
+
+        async function poll() {
+            if (!threadId || !messagesUrl || isPolling) return;
+            isPolling = true;
+            const shouldScroll = nearBottom();
+
+            try {
+                const res = await fetch(`${messagesUrl}?thread_id=${encodeURIComponent(threadId)}&since_id=${encodeURIComponent(lastId)}`, {
+                    credentials: 'same-origin',
+                    cache: 'no-store'
+                });
+                if (!res.ok) return;
+
+                const data = await res.json().catch(() => null);
+                const msgs = Array.isArray(data?.messages) ? data.messages : [];
+                let appendedAny = false;
+                msgs.forEach(msg => {
+                    appendedAny = appendMessage(msg) || appendedAny;
+                });
+                if (shouldScroll && appendedAny) scrollToBottom();
+            } catch (e) {
+                // Ignore transient polling failures.
+            } finally {
+                isPolling = false;
+            }
+        }
+
+        form.addEventListener('submit', async function (e) {
+            e.preventDefault();
+            if (isSending) return;
+
+            const text = (input.value || '').trim();
+            if (!text || !threadId || !sendUrl) return;
+
+            if (form.dataset.submitMode === 'native') {
+                form.dataset.submitMode = '';
+                return;
+            }
+
+            isSending = true;
+            if (sendBtn) sendBtn.disabled = true;
+            setStatus('');
+
+            function fallbackSubmit(message) {
+                if (message) setStatus(message, true);
+                form.dataset.submitMode = 'native';
+                if (sendBtn) sendBtn.disabled = false;
+                form.submit();
+            }
+
+            try {
+                const fd = new FormData();
+                fd.append('thread_id', String(threadId));
+                fd.append('message', text);
+
+                const res = await fetch(sendUrl, {
+                    method: 'POST',
+                    body: fd,
+                    credentials: 'same-origin'
+                });
+                const data = await res.json().catch(() => null);
+
+                if (!res.ok || !data?.message) {
+                    fallbackSubmit(data?.error || 'Falling back to standard send...');
+                    return;
+                }
+
+                appendMessage(data.message);
+                input.value = '';
+                setStatus('Message sent.');
+                scrollToBottom();
+            } catch (e) {
+                fallbackSubmit('Connection issue. Sending with the standard form...');
+            } finally {
+                isSending = false;
+                if (form.dataset.submitMode !== 'native' && sendBtn) sendBtn.disabled = false;
+                input.focus();
+            }
+        });
+
+        scrollToBottom();
+        window.setInterval(poll, pollMs);
+    });
+
+    document.querySelectorAll('tr.room-row').forEach(row => {
+        const form = row.querySelector('form');
+        const editBtn = row.querySelector('.room-edit-toggle');
+        const cancelBtn = row.querySelector('.room-cancel-btn');
+        if (!editBtn || !cancelBtn) return;
+
+        row.querySelectorAll('input, select, textarea').forEach(field => {
+            if (field.type === 'file') return;
+            if (field.type === 'checkbox' || field.type === 'radio') {
+                field.dataset.originalChecked = field.checked ? '1' : '0';
+            } else {
+                field.dataset.originalValue = field.value;
+            }
+        });
+
+        editBtn.addEventListener('click', function () {
+            row.classList.add('is-editing');
+        });
+
+        cancelBtn.addEventListener('click', function () {
+            row.classList.remove('is-editing');
+            row.querySelectorAll('input, select, textarea').forEach(field => {
+                if (field.type === 'file') {
+                    field.value = '';
+                    return;
+                }
+                if (field.type === 'checkbox' || field.type === 'radio') {
+                    field.checked = field.dataset.originalChecked === '1';
+                } else if (field.dataset.originalValue !== undefined) {
+                    field.value = field.dataset.originalValue;
+                }
+            });
+            row.querySelectorAll('.file-preview').forEach(preview => {
+                preview.innerHTML = '';
+            });
+        });
+    });
 });

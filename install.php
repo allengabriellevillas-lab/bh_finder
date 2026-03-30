@@ -35,10 +35,22 @@ function runSchema(): void {
         throw new RuntimeException('Unable to read schema.sql');
     }
 
+    // Strip UTF-8 BOM if present so leading comment lines are matched correctly.
+    $sql = preg_replace('/^\xEF\xBB\xBF/', '', $sql);
+    if (!is_string($sql)) {
+        throw new RuntimeException('Unable to parse schema.sql');
+    }
+
+    // Remove full-line SQL comments so statement splitting does not try to execute them.
+    $sql = preg_replace('/^\\s*--.*$/m', '', $sql);
+    if (!is_string($sql)) {
+        throw new RuntimeException('Unable to parse schema.sql');
+    }
+
     $db = getDB();
-    foreach (preg_split('/;\\s*\\R/', $sql) as $stmt) {
+    foreach (preg_split('/;\\s*(?:\\R|$)/', $sql) as $stmt) {
         $stmt = trim($stmt);
-        if ($stmt === '' || str_starts_with($stmt, '--')) continue;
+        if ($stmt === '') continue;
         try {
             $db->exec($stmt);
         } catch (Throwable $e) {
@@ -108,9 +120,12 @@ function ensureRoomTables(): void {
       id INT UNSIGNED NOT NULL AUTO_INCREMENT,
       boarding_house_id INT UNSIGNED NOT NULL,
       room_name VARCHAR(120) NOT NULL,
+      accommodation_type VARCHAR(60) NULL,
       price DECIMAL(10,2) NOT NULL DEFAULT 0.00,
       capacity INT UNSIGNED NOT NULL DEFAULT 1,
       current_occupants INT UNSIGNED NOT NULL DEFAULT 0,
+      amenities TEXT NULL,
+      room_image VARCHAR(255) NULL,
       status ENUM('available','occupied') NOT NULL DEFAULT 'available',
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
@@ -118,6 +133,22 @@ function ensureRoomTables(): void {
       KEY idx_rooms_bh (boarding_house_id),
       KEY idx_rooms_status (status)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
+    try {
+        $db->exec("ALTER TABLE rooms ADD COLUMN accommodation_type VARCHAR(60) NULL AFTER room_name");
+    } catch (Throwable $e) {
+        // ignore if the column already exists
+    }
+    try {
+        $db->exec("ALTER TABLE rooms ADD COLUMN amenities TEXT NULL");
+    } catch (Throwable $e) {
+        // ignore if the column already exists
+    }
+    try {
+        $db->exec("ALTER TABLE rooms ADD COLUMN room_image VARCHAR(255) NULL");
+    } catch (Throwable $e) {
+        // ignore if the column already exists
+    }
 
     $db->exec("CREATE TABLE IF NOT EXISTS room_requests (
       id INT UNSIGNED NOT NULL AUTO_INCREMENT,
