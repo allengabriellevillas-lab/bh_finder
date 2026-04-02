@@ -1,4 +1,4 @@
-﻿<?php
+<?php
 require_once __DIR__ . '/includes/config.php';
 if (isLoggedIn()) { header('Location: ' . SITE_URL . '/index.php'); exit; }
 $pageTitle = 'Login';

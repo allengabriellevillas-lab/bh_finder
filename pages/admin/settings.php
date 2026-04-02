@@ -1,4 +1,4 @@
-﻿<?php
+<?php
 require_once __DIR__ . '/_common.php';
 
 $pageTitle = 'System Settings';
@@ -9,6 +9,11 @@ try { $db->query("SELECT 1 FROM settings LIMIT 1"); } catch (Throwable $e) { $ha
 $defaults = [
     'owner_verification_required' => '1',
     'listing_approval_required' => '1',
+    'service_fee_percentage' => '5',
+    'owner_subscription_days' => '30',
+    'owner_subscription_basic_max_properties' => '2',
+    'owner_subscription_amount_basic' => '999',
+    'owner_subscription_amount_pro' => '1999',
 ];
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && $hasSettings) {
@@ -137,7 +142,7 @@ require_once __DIR__ . '/../../includes/header.php';
             </div>
 
             <div class="text-muted text-xs mt-3">
-              Suggested keys: <code>owner_verification_required</code>, <code>listing_approval_required</code>.
+              Suggested keys: <code>owner_verification_required</code>, <code>listing_approval_required</code>, <code>service_fee_percentage</code>, <code>owner_subscription_days</code>, <code>owner_subscription_amount_basic</code>, <code>owner_subscription_amount_pro</code>, <code>owner_subscription_basic_max_properties</code>.
             </div>
           <?php endif; ?>
         </div>

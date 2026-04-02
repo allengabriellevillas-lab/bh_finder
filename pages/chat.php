@@ -1,4 +1,4 @@
-﻿<?php
+<?php
 require_once __DIR__ . '/../includes/config.php';
 
 requireTenant();
@@ -94,6 +94,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['send_message'])) {
             }
             $db->prepare("UPDATE chat_threads SET last_message_at = NOW() WHERE id = ?")
                ->execute([intval($thread['id'])]);
+             // Notification (best-effort)
+             try { notifyNewChatMessage($db, intval($thread['id']), $uid); } catch (Throwable $e) {}
         } catch (Throwable $e) {
             setFlash('error', 'Failed to send message.');
         }
@@ -169,4 +171,6 @@ require_once __DIR__ . '/../includes/header.php';
   </div>
 </div>
 <?php require_once __DIR__ . '/../includes/footer.php'; ?>
+
+
 

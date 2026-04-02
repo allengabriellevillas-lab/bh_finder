@@ -1,4 +1,4 @@
-﻿<?php
+<?php
 require_once __DIR__ . '/includes/config.php';
 
 $pageTitle = 'Find Your Boarding House';
@@ -17,6 +17,7 @@ $offset   = ($page - 1) * $perPage;
 
 // ── Build Query ──
 $db = getDB();
+ensureFeaturedListingColumns();
 
 // Search & filter monitoring (best-effort)
 try {
@@ -44,13 +45,43 @@ $bhCols = $db->query('SHOW COLUMNS FROM boarding_houses')->fetchAll() ?: [];
 $bhFields = array_map(fn($r) => (string)($r['Field'] ?? ''), $bhCols);
 $addressCol = in_array('location', $bhFields, true) ? 'location' : (in_array('address', $bhFields, true) ? 'address' : 'location');
 $hasApprovalStatus = in_array('approval_status', $bhFields, true);
+$hasIsActive = in_array('is_active', $bhFields, true);
+$hasExpiresAt = in_array('expires_at', $bhFields, true);
+$roomCols = [];
+try {
+    $roomCols = $db->query('SHOW COLUMNS FROM rooms')->fetchAll() ?: [];
+} catch (Throwable $e) {
+    $roomCols = [];
+}
+$roomFields = array_map(fn($r) => (string)($r['Field'] ?? ''), $roomCols);
+$hasRoomSubscription = in_array('subscription_status', $roomFields, true);
+$hasRoomSubEnd = in_array('end_date', $roomFields, true);
+$enforceRoomSub = function_exists('roomSubscriptionEnforced') ? roomSubscriptionEnforced() : false;
+
+$roomPriceExtraWhere = "price IS NOT NULL AND price > 0";
+if ($enforceRoomSub && $hasRoomSubscription) {
+    $roomPriceExtraWhere .= " AND subscription_status = 'active'";
+    if ($hasRoomSubEnd) $roomPriceExtraWhere .= " AND (end_date IS NULL OR end_date >= CURDATE())";
+}
+
+$roomPriceJoin = "LEFT JOIN (\n"
+    . "  SELECT boarding_house_id, MIN(price) AS room_price_min, MAX(price) AS room_price_max\n"
+    . "  FROM rooms\n"
+    . "  WHERE $roomPriceExtraWhere\n"
+    . "  GROUP BY boarding_house_id\n"
+    . ") rp ON rp.boarding_house_id = bh.id";
+
+$priceMinExpr = "COALESCE(rp.room_price_min, bh.price_min)";
+$priceMaxExpr = "COALESCE(rp.room_price_max, COALESCE(bh.price_max, bh.price_min))";
 
 $conditions = ["bh.status != 'inactive'"];
+if ($hasIsActive) $conditions[] = "bh.is_active = 1";
+if ($hasExpiresAt) $conditions[] = "(bh.expires_at IS NULL OR bh.expires_at >= NOW())";
 if ($hasApprovalStatus) $conditions[] = "bh.approval_status = 'approved'";
 $params = [];
 
 if ($search !== '') {
-    $conditions[] = "(bh.name LIKE ? OR bh.$addressCol LIKE ? OR bh.city LIKE ? OR CAST(bh.price_min AS CHAR) LIKE ? OR CAST(COALESCE(bh.price_max, bh.price_min) AS CHAR) LIKE ?)";
+    $conditions[] = "(bh.name LIKE ? OR bh.$addressCol LIKE ? OR bh.city LIKE ? OR CAST($priceMinExpr AS CHAR) LIKE ? OR CAST($priceMaxExpr AS CHAR) LIKE ?)";
     $params[] = "%$search%";
     $params[] = "%$search%";
     $params[] = "%$search%";
@@ -61,8 +92,8 @@ if ($city !== '') {
     $conditions[] = "bh.city LIKE ?";
     $params[] = "%$city%";
 }
-if ($minPrice > 0) { $conditions[] = "bh.price_min >= ?"; $params[] = $minPrice; }
-if ($maxPrice > 0) { $conditions[] = "bh.price_min <= ?"; $params[] = $maxPrice; }
+if ($minPrice > 0) { $conditions[] = "$priceMinExpr >= ?"; $params[] = $minPrice; }
+if ($maxPrice > 0) { $conditions[] = "$priceMinExpr <= ?"; $params[] = $maxPrice; }
 if ($minRooms > 0) { $conditions[] = "bh.available_rooms >= ?"; $params[] = $minRooms; }
 if ($type !== '') { $conditions[] = "bh.accommodation_type = ?"; $params[] = $type; }
 if ($amenityId > 0) {
@@ -76,7 +107,7 @@ if ($amenityId > 0) {
 
 $whereClause = 'WHERE ' . implode(' AND ', $conditions);
 
-$countStmt = $db->prepare("SELECT COUNT(*) FROM boarding_houses bh $whereClause");
+$countStmt = $db->prepare("SELECT COUNT(*) FROM boarding_houses bh\r\n             $roomPriceJoin $whereClause");
 $countStmt->execute($params);
 $totalCount = intval($countStmt->fetchColumn() ?: 0);
 $totalPages = max(1, (int)ceil($totalCount / $perPage));
@@ -85,16 +116,18 @@ $listings = [];
 try {
     try {
         $listingsStmt = $db->prepare("
-            SELECT bh.*, u.full_name AS owner_name,
-                   (SELECT pi.image_path FROM boarding_house_images pi WHERE pi.boarding_house_id = bh.id AND pi.is_cover = 1 LIMIT 1) AS primary_image,
-                   (SELECT pi2.image_path FROM boarding_house_images pi2 WHERE pi2.boarding_house_id = bh.id LIMIT 1) AS first_image,
-                   GROUP_CONCAT(a.name ORDER BY a.name SEPARATOR '||') AS amenity_names,
-                   rev.avg_rating,
-                   rev.review_count
-            FROM boarding_houses bh
+            SELECT bh.*, u.full_name AS owner_name, u.owner_verified, u.owner_verification_status,\r\n                   (SELECT plan FROM owner_subscriptions os WHERE os.owner_id = bh.owner_id AND os.status = 'active' AND (os.end_date IS NULL OR os.end_date >= CURDATE()) ORDER BY COALESCE(os.end_date, '9999-12-31') DESC, os.id DESC LIMIT 1) AS owner_plan_type,\r\n                   rp.room_price_min,\r\n                   rp.room_price_max,
+                    (SELECT pi.image_path FROM boarding_house_images pi WHERE pi.boarding_house_id = bh.id AND pi.is_cover = 1 LIMIT 1) AS primary_image,
+                    (SELECT pi2.image_path FROM boarding_house_images pi2 WHERE pi2.boarding_house_id = bh.id LIMIT 1) AS first_image,
+                    (SELECT GROUP_CONCAT(a.name ORDER BY a.name SEPARATOR '||')
+                     FROM boarding_house_amenities bha
+                     JOIN amenities a ON a.id = bha.amenity_id
+                     WHERE bha.boarding_house_id = bh.id) AS amenity_names,
+                    rev.avg_rating,
+                    rev.review_count
+            FROM boarding_houses bh\r\n            
+            $roomPriceJoin
             JOIN users u ON u.id = bh.owner_id
-            LEFT JOIN boarding_house_amenities bha ON bha.boarding_house_id = bh.id
-            LEFT JOIN amenities a ON a.id = bha.amenity_id
             LEFT JOIN (
                 SELECT boarding_house_id, AVG(rating) AS avg_rating, COUNT(*) AS review_count
                 FROM reviews
@@ -102,25 +135,25 @@ try {
                 GROUP BY boarding_house_id
             ) rev ON rev.boarding_house_id = bh.id
             $whereClause
-            GROUP BY bh.id
-            ORDER BY bh.created_at DESC
+            ORDER BY (CASE WHEN bh.is_featured = 1 AND (bh.featured_until IS NULL OR bh.featured_until >= NOW()) THEN 1 ELSE 0 END) DESC, bh.created_at DESC
             LIMIT $perPage OFFSET $offset
         ");
         $listingsStmt->execute($params);
         $listings = $listingsStmt->fetchAll() ?: [];
     } catch (Throwable $e) {
         $listingsStmt = $db->prepare("
-            SELECT bh.*, u.full_name AS owner_name,
-                   (SELECT pi.image_path FROM boarding_house_images pi WHERE pi.boarding_house_id = bh.id AND pi.is_cover = 1 LIMIT 1) AS primary_image,
-                   (SELECT pi2.image_path FROM boarding_house_images pi2 WHERE pi2.boarding_house_id = bh.id LIMIT 1) AS first_image,
-                   GROUP_CONCAT(a.name ORDER BY a.name SEPARATOR '||') AS amenity_names
-            FROM boarding_houses bh
+            SELECT bh.*, u.full_name AS owner_name, u.owner_verified, u.owner_verification_status,\r\n                   (SELECT plan FROM owner_subscriptions os WHERE os.owner_id = bh.owner_id AND os.status = 'active' AND (os.end_date IS NULL OR os.end_date >= CURDATE()) ORDER BY COALESCE(os.end_date, '9999-12-31') DESC, os.id DESC LIMIT 1) AS owner_plan_type,\r\n                   rp.room_price_min,\r\n                   rp.room_price_max,
+                    (SELECT pi.image_path FROM boarding_house_images pi WHERE pi.boarding_house_id = bh.id AND pi.is_cover = 1 LIMIT 1) AS primary_image,
+                    (SELECT pi2.image_path FROM boarding_house_images pi2 WHERE pi2.boarding_house_id = bh.id LIMIT 1) AS first_image,
+                    (SELECT GROUP_CONCAT(a.name ORDER BY a.name SEPARATOR '||')
+                     FROM boarding_house_amenities bha
+                     JOIN amenities a ON a.id = bha.amenity_id
+                     WHERE bha.boarding_house_id = bh.id) AS amenity_names
+            FROM boarding_houses bh\r\n            
+            $roomPriceJoin
             JOIN users u ON u.id = bh.owner_id
-            LEFT JOIN boarding_house_amenities bha ON bha.boarding_house_id = bh.id
-            LEFT JOIN amenities a ON a.id = bha.amenity_id
             $whereClause
-            GROUP BY bh.id
-            ORDER BY bh.created_at DESC
+            ORDER BY (CASE WHEN bh.is_featured = 1 AND (bh.featured_until IS NULL OR bh.featured_until >= NOW()) THEN 1 ELSE 0 END) DESC, bh.created_at DESC
             LIMIT $perPage OFFSET $offset
         ");
         $listingsStmt->execute($params);
@@ -310,7 +343,7 @@ require_once __DIR__ . '/includes/header.php';
               $amenities = !empty($l['amenity_names']) ? explode('||', $l['amenity_names']) : [];
               $display = array_slice($amenities, 0, 4);
               $extra   = max(0, count($amenities) - 4);
-              $status = $l['status'] ?? 'active';
+              $statusUi = boardingHouseStatusUi((string)($l['status'] ?? 'active'));
               $availableRooms = intval($l['available_rooms'] ?? 0);
               $totalRooms = intval($l['total_rooms'] ?? 0);
               $locationText = trim((string)($l['location'] ?? ($l['address'] ?? '')));
@@ -320,6 +353,7 @@ require_once __DIR__ . '/includes/header.php';
               $isFavorite = in_array($listingId, $favoriteIds, true);
               $avg = $l['avg_rating'] !== null ? (float)$l['avg_rating'] : 0.0;
               $cnt = intval($l['review_count'] ?? 0);
+              $ownerVerified = ((string)($l['owner_verification_status'] ?? '') === 'verified') || (intval($l['owner_verified'] ?? 0) === 1);
           ?>
           <article class="property-card">
             <div class="property-image">
@@ -329,7 +363,27 @@ require_once __DIR__ . '/includes/header.php';
                 <div class="property-image-placeholder"><i class="fas fa-building"></i><span>No Photo</span></div>
               <?php endif; ?>
 
-              <span class="property-status status-<?= sanitize($status) ?>"><?= $status === 'full' ? 'Full' : ($status === 'active' ? 'Available' : 'Inactive') ?></span>
+              <span class="property-status status-<?= sanitize($statusUi) ?>"><?= $statusUi === 'full' ? 'Full' : ($statusUi === 'active' ? 'Available' : 'Inactive') ?></span>
+              <?php
+  $isPremiumOwner = strtolower((string)($l['owner_plan_type'] ?? '')) === 'pro';
+  $featUntil = trim((string)($l['featured_until'] ?? ''));
+  $isFeatured = intval($l['is_featured'] ?? 0) === 1 && ($featUntil === '' || strtotime($featUntil) >= time());
+  $badgeTop = 12;
+?>
+
+<?php if ($isFeatured): ?>
+  <span class="property-badge" style="left:12px;top:<?= $badgeTop ?>px;background:rgba(255,193,7,0.16);color:#8A5A00;border:1px solid rgba(255,193,7,0.35)"><i class="fas fa-star"></i> Featured</span>
+  <?php $badgeTop += 36; ?>
+<?php endif; ?>
+
+<?php if (!empty($ownerVerified)): ?>
+  <span class="property-badge" style="left:12px;top:<?= $badgeTop ?>px;background:rgba(27,122,74,0.12);color:var(--success);border:1px solid rgba(27,122,74,0.25)"><i class="fas fa-shield-check"></i> Verified Owner</span>
+  <?php $badgeTop += 36; ?>
+<?php endif; ?>
+
+<?php if ($isPremiumOwner): ?>
+  <span class="property-badge" style="left:12px;top:<?= $badgeTop ?>px;background:rgba(58,123,255,0.12);color:var(--primary);border:1px solid rgba(58,123,255,0.25)"><i class="fas fa-crown"></i> Premium Owner</span>
+<?php endif; ?>
 
               <?php if (isLoggedIn()): ?>
                 <form method="POST" action="<?= SITE_URL ?>/pages/favorite_toggle.php" class="fav-form">
@@ -366,10 +420,17 @@ require_once __DIR__ . '/includes/header.php';
                 <span><?= $cnt > 0 ? sanitize(number_format($avg, 1)) : '—' ?></span>
                 <small>(<?= number_format($cnt) ?>)</small>
               </div>
+              <?php
+                $pMin = $l['room_price_min'] !== null ? (float)$l['room_price_min'] : (float)($l['price_min'] ?? 0);
+                $pMaxRaw = $l['room_price_max'] !== null ? (float)$l['room_price_max'] : (!empty($l['price_max']) ? (float)$l['price_max'] : null);
+                $pMax = ($pMaxRaw !== null && $pMaxRaw > $pMin) ? $pMaxRaw : null;
+              ?>
               <div class="property-price">
-                <?= formatPrice((float)($l['price_min'] ?? 0)) ?>
-                <?php if (!empty($l['price_max']) && (float)$l['price_max'] > (float)($l['price_min'] ?? 0)): ?> – <?= formatPrice((float)$l['price_max']) ?><?php endif; ?>
-                <small>/month</small>
+                <?php if ($pMin > 0): ?>
+                  <?= formatPrice($pMin) ?><?php if ($pMax !== null): ?> – <?= formatPrice($pMax) ?><?php endif; ?> <small>/month</small>
+                <?php else: ?>
+                  —
+                <?php endif; ?>
               </div>
 
               <?php if (!empty($display)): ?>
@@ -422,4 +483,13 @@ require_once __DIR__ . '/includes/header.php';
 </div>
 
 <?php require_once __DIR__ . '/includes/footer.php'; ?>
+
+
+
+
+
+
+
+
+
 

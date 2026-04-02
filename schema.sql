@@ -1,4 +1,4 @@
-﻿-- Boarding House Finder - MySQL schema
+-- Boarding House Finder - MySQL schema
 -- Import this into phpMyAdmin, or run from CLI:
 --   mysql -u root boarding_house_finder < schema.sql
 
@@ -13,13 +13,17 @@ CREATE TABLE IF NOT EXISTS users (
   is_active TINYINT(1) NOT NULL DEFAULT 1,
   owner_verified TINYINT(1) NOT NULL DEFAULT 0,
   owner_verified_at TIMESTAMP NULL DEFAULT NULL,
+  owner_verification_status ENUM('pending','verified','rejected') NULL DEFAULT NULL,
+  owner_id_doc_path VARCHAR(255) NULL,
+  owner_verification_reason TEXT NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   UNIQUE KEY uq_users_email (email),
   KEY idx_users_role (role),
   KEY idx_users_active (is_active),
-  KEY idx_users_owner_verified (owner_verified)
+  KEY idx_users_owner_verified (owner_verified),
+  KEY idx_users_owner_vstatus (owner_verification_status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS boarding_houses (
@@ -36,6 +40,9 @@ CREATE TABLE IF NOT EXISTS boarding_houses (
   total_rooms INT UNSIGNED NOT NULL DEFAULT 0,
   available_rooms INT UNSIGNED NOT NULL DEFAULT 0,
   status ENUM('active','inactive','full') NOT NULL DEFAULT 'active',
+  is_active TINYINT(1) NOT NULL DEFAULT 1,
+  expires_at DATETIME NULL,
+  subscription_id INT UNSIGNED NULL,
   contact_phone VARCHAR(50) NULL,
   contact_email VARCHAR(190) NULL,
   approval_status ENUM('pending','approved','rejected') NOT NULL DEFAULT 'approved',
@@ -43,6 +50,8 @@ CREATE TABLE IF NOT EXISTS boarding_houses (
   approved_at TIMESTAMP NULL DEFAULT NULL,
   rejected_reason TEXT NULL,
   views INT UNSIGNED NOT NULL DEFAULT 0,
+  is_featured TINYINT(1) NOT NULL DEFAULT 0,
+  featured_until DATETIME NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
@@ -52,8 +61,26 @@ CREATE TABLE IF NOT EXISTS boarding_houses (
   KEY idx_bh_type (accommodation_type),
   KEY idx_bh_approval (approval_status),
   KEY idx_bh_views (views),
+  KEY idx_bh_featured (is_featured),
+  KEY idx_bh_featured_until (featured_until),
   CONSTRAINT fk_bh_owner FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE,
   CONSTRAINT fk_bh_approved_by FOREIGN KEY (approved_by) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Owner subscriptions (property-based; rooms are free)
+CREATE TABLE IF NOT EXISTS owner_subscriptions (
+  id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  owner_id INT UNSIGNED NOT NULL,
+  plan ENUM('basic','pro') NOT NULL DEFAULT 'basic',
+  status ENUM('pending','active','expired','rejected') NOT NULL DEFAULT 'pending',
+  start_date DATE NULL,
+  end_date DATE NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_os_owner (owner_id),
+  KEY idx_os_status (status),
+  KEY idx_os_end (end_date)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS boarding_house_images (
@@ -194,6 +221,15 @@ CREATE TABLE IF NOT EXISTS favorites (
   KEY idx_fav_bh (boarding_house_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- Daily Views (for owner notifications / analytics)
+CREATE TABLE IF NOT EXISTS boarding_house_daily_views (
+  boarding_house_id INT NOT NULL,
+  view_date DATE NOT NULL,
+  views INT UNSIGNED NOT NULL DEFAULT 0,
+  PRIMARY KEY (boarding_house_id, view_date),
+  KEY idx_bhdv_date (view_date)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 -- Ratings / Reviews
 CREATE TABLE IF NOT EXISTS reviews (
   id INT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -251,18 +287,23 @@ CREATE TABLE IF NOT EXISTS rooms (
   amenities TEXT NULL,
   room_image VARCHAR(255) NULL,
   status ENUM('available','occupied') NOT NULL DEFAULT 'available',
+  subscription_status ENUM('inactive','pending','active','expired') NOT NULL DEFAULT 'inactive',
+  start_date DATE NULL,
+  end_date DATE NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   KEY idx_rooms_bh (boarding_house_id),
-  KEY idx_rooms_status (status)
+  KEY idx_rooms_status (status),
+  KEY idx_rooms_sub_status (subscription_status),
+  KEY idx_rooms_sub_end (end_date)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS room_requests (
   id INT UNSIGNED NOT NULL AUTO_INCREMENT,
   room_id INT NOT NULL,
   tenant_id INT NOT NULL,
-  status ENUM('pending','approved','rejected','cancelled') NOT NULL DEFAULT 'pending',
+  status ENUM('pending','approved','rejected','occupied','cancelled') NOT NULL DEFAULT 'pending',
   move_in_date DATE NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
@@ -271,4 +312,66 @@ CREATE TABLE IF NOT EXISTS room_requests (
   KEY idx_rr_tenant (tenant_id),
   KEY idx_rr_status (status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Payments (PayPal Sandbox / proof upload) per room subscription
+CREATE TABLE IF NOT EXISTS payments (
+  id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  user_id INT UNSIGNED NOT NULL,
+  room_id INT UNSIGNED NULL,
+  subscription_id INT UNSIGNED NULL,
+  kind ENUM('room_subscription','owner_subscription') NOT NULL DEFAULT 'owner_subscription',
+  plan ENUM('basic','pro') NULL,
+  plan_type ENUM('basic','pro') NULL,
+  original_price DECIMAL(10,2) NULL,
+  paid_price DECIMAL(10,2) NULL,
+  is_intro TINYINT(1) NOT NULL DEFAULT 0,
+  amount DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+  method ENUM('proof_upload','simulated','paypal') NOT NULL DEFAULT 'proof_upload',
+  proof_path VARCHAR(255) NULL,
+  paypal_order_id VARCHAR(64) NULL,
+  paypal_capture_id VARCHAR(64) NULL,
+  status ENUM('pending','approved','rejected') NOT NULL DEFAULT 'pending',
+  admin_note TEXT NULL,
+  reviewed_by INT UNSIGNED NULL,
+  reviewed_at TIMESTAMP NULL DEFAULT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_pay_user (user_id),
+  KEY idx_pay_room (room_id),
+  KEY idx_pay_sub (subscription_id),
+  KEY idx_pay_kind (kind),
+  KEY idx_pay_plan_type (plan_type),
+  KEY idx_pay_intro (is_intro),
+  KEY idx_pay_status (status),
+  KEY idx_pay_created (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Notifications
+CREATE TABLE IF NOT EXISTS notifications (
+  id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  user_id INT UNSIGNED NOT NULL,
+  type VARCHAR(80) NOT NULL,
+  title VARCHAR(200) NOT NULL,
+  body TEXT NULL,
+  link_url VARCHAR(255) NULL,
+  is_read TINYINT(1) NOT NULL DEFAULT 0,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_notif_user (user_id, is_read),
+  KEY idx_notif_created (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Admin warnings (anti-scam)
+CREATE TABLE IF NOT EXISTS admin_warnings (
+  id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  owner_id INT UNSIGNED NOT NULL,
+  message TEXT NOT NULL,
+  is_active TINYINT(1) NOT NULL DEFAULT 1,
+  created_by INT UNSIGNED NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_warn_owner (owner_id, is_active),
+  KEY idx_warn_created (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 

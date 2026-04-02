@@ -1,4 +1,4 @@
-﻿<?php
+<?php
 require_once __DIR__ . '/_bootstrap.php';
 
 requireMethod('GET');
@@ -14,9 +14,37 @@ $db = getDB();
 $bhCols = $db->query("SHOW COLUMNS FROM boarding_houses")->fetchAll() ?: [];
 $bhFields = array_map(fn($r) => (string)($r['Field'] ?? ''), $bhCols);
 $hasApprovalStatus = in_array('approval_status', $bhFields, true);
+$hasIsActive = in_array('is_active', $bhFields, true);
+$hasExpiresAt = in_array('expires_at', $bhFields, true);
+
+$roomCols = [];
+try {
+    $roomCols = $db->query('SHOW COLUMNS FROM rooms')->fetchAll() ?: [];
+} catch (Throwable $e) {
+    $roomCols = [];
+}
+$roomFields = array_map(fn($r) => (string)($r['Field'] ?? ''), $roomCols);
+$hasRoomSubscription = in_array('subscription_status', $roomFields, true);
+$hasRoomSubEnd = in_array('end_date', $roomFields, true);
+$enforceRoomSub = function_exists('roomSubscriptionEnforced') ? roomSubscriptionEnforced() : false;
+
+$roomPriceExtraWhere = "price IS NOT NULL AND price > 0";
+if ($enforceRoomSub && $hasRoomSubscription) {
+    $roomPriceExtraWhere .= " AND subscription_status = 'active'";
+    if ($hasRoomSubEnd) $roomPriceExtraWhere .= " AND (end_date IS NULL OR end_date >= CURDATE())";
+}
+
+$roomPriceJoin = "LEFT JOIN (\n"
+    . "  SELECT boarding_house_id, MIN(price) AS room_price_min, MAX(price) AS room_price_max\n"
+    . "  FROM rooms\n"
+    . "  WHERE $roomPriceExtraWhere\n"
+    . "  GROUP BY boarding_house_id\n"
+    . ") rp ON rp.boarding_house_id = bh.id";
 
 
 $conditions = ["bh.status != 'inactive'"];
+if ($hasIsActive) $conditions[] = "bh.is_active = 1";
+if ($hasExpiresAt) $conditions[] = "(bh.expires_at IS NULL OR bh.expires_at >= NOW())";
 if ($hasApprovalStatus) $conditions[] = "bh.approval_status = 'approved'";
 $params = [];
 
@@ -56,14 +84,15 @@ $stmt = $db->prepare("
     bh.name,
     bh.location,
     bh.city,
-    bh.price_min,
-    bh.price_max,
+    COALESCE(rp.room_price_min, bh.price_min) AS price_min,
+    COALESCE(rp.room_price_max, bh.price_max) AS price_max,
     bh.accommodation_type,
     bh.total_rooms,
     bh.available_rooms,
     bh.status,
     (SELECT pi.image_path FROM boarding_house_images pi WHERE pi.boarding_house_id = bh.id AND pi.is_cover = 1 LIMIT 1) AS primary_image
   FROM boarding_houses bh
+  $roomPriceJoin
   $where
   ORDER BY bh.created_at DESC
   LIMIT $limit OFFSET $offset

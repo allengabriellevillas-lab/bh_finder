@@ -1,0 +1,5 @@
+﻿# Local secrets (never commit)
+/includes/secrets.local.php
+
+# User uploads
+/uploads/

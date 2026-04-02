@@ -1,4 +1,4 @@
-﻿<?php
+<?php
 require_once __DIR__ . '/../../includes/config.php';
 requireOwner();
 
@@ -50,60 +50,10 @@ require_once __DIR__ . '/../../includes/header.php';
 
 <?php $me = getCurrentUser(); ?>
 <div class="dash-shell">
-  <aside class="dash-sidebar">
-    <a class="dash-brand" href="dashboard.php" aria-label="<?= sanitize(SITE_NAME) ?>">
-      <span class="dash-logo-wrap"><img class="dash-logo" src="<?= SITE_URL ?>/boardease-logo.png" alt="<?= sanitize(SITE_NAME) ?> logo"></span>
-      <span class="sr-only"><?= sanitize(SITE_NAME) ?></span>
-    </a>
-
-    <a class="dash-action" href="add_listing.php" title="Create a new listing">
-      <span>Add Listing</span>
-      <i class="fas fa-plus"></i>
-    </a>
-
-    <nav class="dash-nav">
-      <a href="dashboard.php"><i class="fas fa-gauge"></i> Overview</a>
-      <a href="rooms.php"><i class="fas fa-door-open"></i> Rooms</a>
-      <a class="active" href="chats.php"><i class="fas fa-comments"></i> Chats <?php if ($unreadCount > 0): ?><span class="sidebar-badge"><?= $unreadCount ?></span><?php endif; ?></a>
-      <a href="<?= SITE_URL ?>/index.php"><i class="fas fa-house"></i> Browse</a>
-    </nav>
-
-  </aside>
+<?php $activeNav = 'chats'; include __DIR__ . '/_partials/sidebar.php'; ?>
 
   <div class="dash-main">
-    <div class="dash-topbar">
-      <div class="dash-search" aria-label="Search">
-        <i class="fas fa-magnifying-glass"></i>
-        <input type="search" placeholder="Search..." disabled>
-      </div>
-
-      <div class="dash-top-actions">
-        <a class="dash-icon-btn" href="chats.php" title="Chats" aria-label="Chats"><i class="fas fa-comments"></i></a>
-
-        <div class="nav-user">
-          <button class="user-btn" id="userBtn" type="button">
-            <span class="user-avatar"><?= strtoupper(substr(sanitize($me['full_name'] ?? 'U'), 0, 1)) ?></span>
-            <span><?= sanitize($me['full_name'] ?? 'Property Owner') ?></span>
-            <i class="fas fa-chevron-down" style="font-size:0.7rem;color:var(--text-light)"></i>
-          </button>
-
-          <div class="user-dropdown" id="userDropdown">
-            <div class="dropdown-header">
-              <strong><?= sanitize($me['full_name'] ?? '') ?></strong>
-              <span><?= sanitize($me['email'] ?? '') ?></span>
-              <span class="role-badge role-owner">Property Owner</span>
-            </div>
-
-            <a href="dashboard.php"><i class="fas fa-gauge"></i> Dashboard</a>
-            <a href="rooms.php"><i class="fas fa-door-open"></i> Rooms</a>
-            <a href="chats.php"><i class="fas fa-comments"></i> Chats</a>
-            <hr>
-
-            <a class="logout-link" href="<?= SITE_URL ?>/logout.php"><i class="fas fa-right-from-bracket"></i> Logout</a>
-          </div>
-        </div>
-      </div>
-    </div>
+<?php include __DIR__ . '/_partials/topbar.php'; ?>
 
     <div class="dash-content">
       <div class="dash-heading">
@@ -138,14 +88,14 @@ require_once __DIR__ . '/../../includes/header.php';
               <?php foreach ($threads as $t):
                 $unread = intval($t['unread_count'] ?? 0);
                 $snippet = trim((string)($t['last_message'] ?? ''));
-                if ($snippet !== '' && textLength($snippet) > 90) $snippet = textSlice($snippet, 0, 90) . '…';
+                if ($snippet !== '' && textLength($snippet) > 90) $snippet = textSlice($snippet, 0, 90) . 'ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¦';
                 $when = $t['last_message_time'] ? date('M d, H:i', strtotime((string)$t['last_message_time'])) : '';
               ?>
                 <a class="chat-thread" href="chat.php?thread_id=<?= intval($t['id']) ?>">
                   <div class="chat-thread-main">
                     <div class="chat-thread-title">
                       <strong><?= sanitize($t['bh_name'] ?? 'Listing') ?></strong>
-                      <span class="text-muted" style="font-size:.85rem">· <?= sanitize($t['tenant_name'] ?? 'Tenant') ?></span>
+                      <span class="text-muted" style="font-size:.85rem">ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· <?= sanitize($t['tenant_name'] ?? 'Tenant') ?></span>
                     </div>
                     <div class="chat-thread-meta">
                       <span class="text-muted text-sm"><?= sanitize($snippet !== '' ? $snippet : 'No messages yet') ?></span>

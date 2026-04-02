@@ -1,4 +1,4 @@
-﻿<?php
+<?php
 require_once __DIR__ . '/_bootstrap.php';
 
 requireMethod('GET');
@@ -11,6 +11,12 @@ $db = getDB();
 $bhCols = $db->query("SHOW COLUMNS FROM boarding_houses")->fetchAll() ?: [];
 $bhFields = array_map(fn($r) => (string)($r['Field'] ?? ''), $bhCols);
 $hasApprovalStatus = in_array('approval_status', $bhFields, true);
+$hasIsActive = in_array('is_active', $bhFields, true);
+$hasExpiresAt = in_array('expires_at', $bhFields, true);
+
+$activeWhere = "";
+if ($hasIsActive) $activeWhere .= " AND bh.is_active = 1";
+if ($hasExpiresAt) $activeWhere .= " AND (bh.expires_at IS NULL OR bh.expires_at >= NOW())";
 $approvalWhere = "";
 if ($hasApprovalStatus) {
     if (isAdmin()) {
@@ -32,7 +38,7 @@ $stmt = $db->prepare("
     u.created_at AS owner_since
   FROM boarding_houses bh
   JOIN users u ON u.id = bh.owner_id
-  WHERE bh.id = ? AND bh.status != 'inactive'$approvalWhere
+  WHERE bh.id = ?\\n      AND (bh.status != 'inactive')$activeWhere$approvalWhere
   LIMIT 1
 ");
 $stmt->execute([$id]);
@@ -47,6 +53,34 @@ $amenitiesStmt = $db->prepare("SELECT a.id, a.name FROM amenities a JOIN boardin
 $amenitiesStmt->execute([$id]);
 $amenities = $amenitiesStmt->fetchAll() ?: [];
 
+
+$computedPriceMin = (float)($bh['price_min'] ?? 0);
+$computedPriceMax = $bh['price_max'] !== null ? (float)$bh['price_max'] : null;
+
+try {
+    $roomCols = $db->query('SHOW COLUMNS FROM rooms')->fetchAll() ?: [];
+    $roomFields = array_map(fn($r) => (string)($r['Field'] ?? ''), $roomCols);
+    $hasRoomSubscription = in_array('subscription_status', $roomFields, true);
+    $hasRoomSubEnd = in_array('end_date', $roomFields, true);
+    $enforceRoomSub = function_exists('roomSubscriptionEnforced') ? roomSubscriptionEnforced() : false;
+
+    $roomFilter = " AND price IS NOT NULL AND price > 0";
+    if ($enforceRoomSub && $hasRoomSubscription) {
+        $roomFilter .= " AND subscription_status = 'active'";
+        if ($hasRoomSubEnd) $roomFilter .= " AND (end_date IS NULL OR end_date >= CURDATE())";
+    }
+
+    $rp = $db->prepare("SELECT MIN(price) AS min_price, MAX(price) AS max_price FROM rooms WHERE boarding_house_id = ?$roomFilter");
+    $rp->execute([$id]);
+    $row = $rp->fetch() ?: [];
+    if (!empty($row['min_price'])) {
+        $computedPriceMin = (float)$row['min_price'];
+        $computedPriceMax = !empty($row['max_price']) ? (float)$row['max_price'] : null;
+        if ($computedPriceMax !== null && $computedPriceMax <= $computedPriceMin) $computedPriceMax = null;
+    }
+} catch (Throwable $e) {
+    // ignore
+}
 $location = trim((string)($bh['location'] ?? ($bh['address'] ?? '')));
 $city = trim((string)($bh['city'] ?? ''));
 $fullLocation = trim($location . (($location !== '' && $city !== '') ? ', ' : '') . $city);
@@ -59,8 +93,8 @@ $data = [
     'full_location' => $fullLocation,
     'description' => (string)($bh['description'] ?? ''),
     'rules' => (string)($bh['rules'] ?? ''),
-    'price_min' => (float)($bh['price_min'] ?? 0),
-    'price_max' => $bh['price_max'] !== null ? (float)$bh['price_max'] : null,
+    'price_min' => $computedPriceMin,
+    'price_max' => $computedPriceMax,
     'accommodation_type' => (string)($bh['accommodation_type'] ?? ''),
     'total_rooms' => intval($bh['total_rooms'] ?? 0),
     'available_rooms' => intval($bh['available_rooms'] ?? 0),

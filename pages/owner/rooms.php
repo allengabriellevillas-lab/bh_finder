@@ -1,11 +1,14 @@
-﻿<?php
+<?php
 require_once __DIR__ . '/../../includes/config.php';
 requireOwner();
+requireVerifiedOwner();
 
 $db = getDB();
+ensureSubscriptionExpiringNotifications(intval($_SESSION['user_id'] ?? 0));
 $me = getCurrentUser();
 $pageTitle = 'Room Management';
-$roomCols = [];
+
+$roomCols = null;
 try {
     $roomCols = $db->query("SHOW COLUMNS FROM rooms")->fetchAll() ?: [];
 } catch (Throwable $e) {
@@ -15,6 +18,8 @@ $roomFields = array_map(fn($r) => (string)($r['Field'] ?? ''), $roomCols);
 $hasRoomAmenities = in_array('amenities', $roomFields, true);
 $hasRoomImage = in_array('room_image', $roomFields, true);
 $hasRoomAccommodationType = in_array('accommodation_type', $roomFields, true);
+$hasRoomSubscription = false; // Rooms are free (no per-room subscriptions)
+$hasRoomSubEnd = false;
 $roomStatusOptions = [
     'available' => 'Available',
     'occupied' => 'Occupied',
@@ -28,22 +33,51 @@ $roomTypeOptions = [
     'entire_unit' => 'Entire Unit',
 ];
 
+// Per-room subscriptions removed
+
+
 function syncBoardingHouseRoomStats(PDO $db, int $bhId): void {
     try {
-        $stmt = $db->prepare("SELECT
-            COUNT(*) AS total_rooms,
-            SUM(CASE WHEN status = 'available' THEN 1 ELSE 0 END) AS available_rooms
-          FROM rooms WHERE boarding_house_id = ?");
-        $stmt->execute([$bhId]);
-        $row = $stmt->fetch() ?: [];
+        $row = [];
+
+        $enforce = roomSubscriptionEnforced();
+
+        try {
+            if ($enforce) {
+                $stmt = $db->prepare("SELECT
+                    COUNT(*) AS total_rooms,
+                    SUM(CASE WHEN status = 'available'
+                        AND subscription_status = 'active'
+                        AND (end_date IS NULL OR end_date >= CURDATE())
+                    THEN 1 ELSE 0 END) AS available_rooms
+                  FROM rooms WHERE boarding_house_id = ?");
+            } else {
+                $stmt = $db->prepare("SELECT
+                    COUNT(*) AS total_rooms,
+                    SUM(CASE WHEN status = 'available' THEN 1 ELSE 0 END) AS available_rooms
+                  FROM rooms WHERE boarding_house_id = ?");
+            }
+            $stmt->execute([$bhId]);
+            $row = $stmt->fetch() ?: [];
+        } catch (Throwable $e) {
+            $stmt = $db->prepare("SELECT
+                COUNT(*) AS total_rooms,
+                SUM(CASE WHEN status = 'available' THEN 1 ELSE 0 END) AS available_rooms
+              FROM rooms WHERE boarding_house_id = ?");
+            $stmt->execute([$bhId]);
+            $row = $stmt->fetch() ?: [];
+        }
+
         $total = intval($row['total_rooms'] ?? 0);
         $available = intval($row['available_rooms'] ?? 0);
-        $status = ($total > 0 && $available <= 0) ? 'full' : 'active';
+        $canonicalStatus = ($total > 0 && $available <= 0) ? 'full' : 'active';
+        $status = boardingHouseStatusDbValue($db, $canonicalStatus);
+        $inactiveDb = boardingHouseStatusDbValue($db, 'inactive');
 
         $upd = $db->prepare("UPDATE boarding_houses
-          SET total_rooms = ?, available_rooms = ?, status = CASE WHEN status='inactive' THEN status ELSE ? END
-          WHERE id = ?");
-        $upd->execute([$total, $available, $status, $bhId]);
+  SET total_rooms = ?, available_rooms = ?, status = CASE WHEN status=? THEN status ELSE ? END
+  WHERE id = ?");
+        $upd->execute([$total, $available, $inactiveDb, $status, $bhId]);
     } catch (Throwable $e) {
         // ignore
     }
@@ -67,6 +101,12 @@ foreach ($boardingHouses as $b) {
 if ($selectedBhId > 0 && !$selectedBh) {
     $selectedBhId = !empty($boardingHouses) ? intval($boardingHouses[0]['id']) : 0;
     $selectedBh = !empty($boardingHouses) ? $boardingHouses[0] : null;
+}
+
+// Keep listing counters in sync (so tenants see correct room availability)
+foreach ($boardingHouses as $b) {
+    $bid = intval($b['id'] ?? 0);
+    if ($bid > 0) syncBoardingHouseRoomStats($db, $bid);
 }
 
 // Handle actions
@@ -106,6 +146,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $status = ($current >= $capacity || $requestedStatus === 'occupied') ? 'occupied' : 'available';
 
             if ($action === 'add_room') {
+                // Subscription enforcement (optional)
+                if ($hasRoomSubscription && roomSubscriptionEnforced()) {
+                    $cntStmt = $db->prepare("SELECT COUNT(*) FROM rooms WHERE boarding_house_id = ?");
+                    $cntStmt->execute([$bhId]);
+                    $existing = intval($cntStmt->fetchColumn() ?: 0);
+                    if ($existing > 0) {
+                        $actStmt = $db->prepare("SELECT COUNT(*) FROM rooms WHERE boarding_house_id = ? AND subscription_status = 'active' AND (end_date IS NULL OR end_date >= CURDATE())");
+                        $actStmt->execute([$bhId]);
+                        $active = intval($actStmt->fetchColumn() ?: 0);
+                        if ($active <= 0) {
+                            throw new RuntimeException('Subscription required: please activate at least one room subscription before adding more rooms.');
+                        }
+                    }
+                }
                 if ($hasRoomAmenities || $hasRoomAccommodationType) {
                     if ($hasRoomImage) {
                         $roomImageName = null;
@@ -148,6 +202,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $ins->execute([$bhId, $roomName, $price, $capacity, $current, $status]);
                     }
                 }
+                $createdRoomId = intval($db->lastInsertId() ?: 0);
+                if ($createdRoomId > 0 && $hasRoomSubscription) {
+                    $_SESSION['subscription_modal_room_id'] = $createdRoomId;
+                    $_SESSION['subscription_modal_bh_id'] = $bhId;
+                }
+
                 setFlash('success', 'Room added.');
             } else {
                 $chk = $db->prepare("SELECT id" . ($hasRoomImage ? ", room_image" : "") . " FROM rooms WHERE id = ? AND boarding_house_id = ? LIMIT 1");
@@ -226,6 +286,56 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($hasRoomImage && $roomImageToDelete !== '') deleteUploadedFile($roomImageToDelete);
             setFlash('success', 'Room deleted.');
             syncBoardingHouseRoomStats($db, $bhId);
+        } elseif ($action === 'pay_subscription') {
+            if (!$hasRoomSubscription) {
+                throw new RuntimeException('Subscriptions are not available yet. Please run install.php or import the updated schema.sql.');
+            }
+
+            $roomId = intval($_POST['room_id'] ?? 0);
+            if ($roomId <= 0) throw new RuntimeException('Invalid room.');
+
+            $q = $db->prepare("SELECT r.id, r.boarding_house_id
+              FROM rooms r
+              JOIN boarding_houses bh ON bh.id = r.boarding_house_id
+              WHERE r.id = ? AND bh.owner_id = ?
+              LIMIT 1");
+            $q->execute([$roomId, intval($_SESSION['user_id'])]);
+            $room = $q->fetch();
+            if (!$room) throw new RuntimeException('Room not found.');
+
+            $proofPath = null;
+
+            {
+                $file = $_FILES['payment_proof'] ?? null;
+                if (!is_array($file) || empty($file['name'])) {
+                    throw new RuntimeException('Please upload a receipt screenshot, or use PayPal Sandbox checkout.');
+                }
+                $uploaded = uploadImage($file, 'pay_room_' . $roomId);
+                if ($uploaded === false) {
+                    throw new RuntimeException('Proof upload failed. Please use JPG, PNG, or WebP under 5MB.');
+                }
+                $proofPath = $uploaded;
+            }
+
+            try {
+                $ins = $db->prepare("INSERT INTO payments (user_id, room_id, amount, method, proof_path, status)
+                  VALUES (?,?,?,?,?, 'pending')");
+                $ins->execute([
+                    intval($_SESSION['user_id']),
+                    $roomId,
+                    (float)$subscriptionAmount,
+                    'proof_upload',
+                    $proofPath,
+                ]);
+
+                $db->prepare("UPDATE rooms SET subscription_status = 'pending' WHERE id = ?")
+                   ->execute([$roomId]);
+
+                setFlash('success', 'Payment submitted. Waiting for admin approval.');
+            } catch (Throwable $e) {
+                if ($proofPath) deleteUploadedFile($proofPath);
+                throw $e;
+            }
         } elseif ($action === 'assign_tenant') {
             $roomId = intval($_POST['room_id'] ?? 0);
             $tenantId = intval($_POST['tenant_id'] ?? 0);
@@ -254,11 +364,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $tenantQ->execute([$tenantId]);
             if (!$tenantQ->fetch()) throw new RuntimeException('Tenant not found.');
 
-            $dup = $db->prepare("SELECT id FROM room_requests WHERE room_id = ? AND tenant_id = ? AND status IN ('pending','approved') LIMIT 1");
+            $dup = $db->prepare("SELECT id FROM room_requests WHERE room_id = ? AND tenant_id = ? AND status IN ('pending','approved','occupied') LIMIT 1");
             $dup->execute([$roomId, $tenantId]);
             if ($dup->fetch()) throw new RuntimeException('That tenant is already assigned (or has a pending request) for this room.');
 
-            $ins = $db->prepare("INSERT INTO room_requests (room_id, tenant_id, status) VALUES (?,?, 'approved')");
+            $ins = $db->prepare("INSERT INTO room_requests (room_id, tenant_id, status) VALUES (?,?, 'occupied')");
             $ins->execute([$roomId, $tenantId]);
 
             $cur2 = $cur + 1;
@@ -306,15 +416,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $updRoom->execute([$cur2, $status2, $roomId]);
 
             if ($moveInDate !== null) {
-                $updReq = $db->prepare("UPDATE room_requests SET status='approved', move_in_date = ? WHERE id = ?");
+                $updReq = $db->prepare("UPDATE room_requests SET status='occupied', move_in_date = ? WHERE id = ?");
                 $updReq->execute([$moveInDate, $reqId]);
             } else {
-                $updReq = $db->prepare("UPDATE room_requests SET status='approved' WHERE id = ?");
+                $updReq = $db->prepare("UPDATE room_requests SET status='occupied' WHERE id = ?");
                 $updReq->execute([$reqId]);
             }
 
             $db->commit();
             syncBoardingHouseRoomStats($db, $bhId2);
+            // Notification (best-effort)
+            try {
+                $tenantId = 0;
+                try {
+                    $tq = $db->prepare("SELECT tenant_id FROM room_requests WHERE id = ? LIMIT 1");
+                    $tq->execute([$reqId]);
+                    $tenantId = intval($tq->fetchColumn() ?: 0);
+                } catch (Throwable $e) {
+                    $tenantId = 0;
+                }
+                if ($tenantId > 0) notifyRoomRequestDecision($tenantId, $bhId2, $roomId, 'approved');
+            } catch (Throwable $e) {
+                // ignore
+            }
+
             setFlash('success', 'Request approved. Tenant assigned to the room.');
         } elseif ($action === 'reject_request') {
             $reqId = intval($_POST['request_id'] ?? 0);
@@ -324,6 +449,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
               SET rr.status='rejected'
               WHERE rr.id = ? AND bh.owner_id = ? AND rr.status='pending'");
             $upd->execute([$reqId, intval($_SESSION['user_id'])]);
+            // Notification (best-effort)
+            try {
+                $rq = $db->prepare("SELECT rr.tenant_id, rr.room_id, r.boarding_house_id
+                  FROM room_requests rr
+                  JOIN rooms r ON r.id = rr.room_id
+                  JOIN boarding_houses bh ON bh.id = r.boarding_house_id
+                  WHERE rr.id = ? AND bh.owner_id = ? LIMIT 1");
+                $rq->execute([$reqId, intval($_SESSION['user_id'])]);
+                $rr = $rq->fetch() ?: null;
+                if ($rr) {
+                    notifyRoomRequestDecision(intval($rr['tenant_id'] ?? 0), intval($rr['boarding_house_id'] ?? 0), intval($rr['room_id'] ?? 0), 'rejected');
+                }
+            } catch (Throwable $e) {
+                // ignore
+            }
+
             setFlash('success', 'Request rejected.');
         }
     } catch (Throwable $e) {
@@ -338,6 +479,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     exit;
 }
 
+
+$subscriptionModalRoom = null;
+$subscriptionModalRoomId = intval($_SESSION['subscription_modal_room_id'] ?? 0);
+$subscriptionModalBhId = intval($_SESSION['subscription_modal_bh_id'] ?? 0);
+unset($_SESSION['subscription_modal_room_id'], $_SESSION['subscription_modal_bh_id']);
+
+if ($subscriptionModalRoomId > 0 && $hasRoomSubscription) {
+    try {
+        $stmt = $db->prepare("SELECT r.id, r.room_name, r.subscription_status, r.boarding_house_id
+          FROM rooms r
+          JOIN boarding_houses bh ON bh.id = r.boarding_house_id
+          WHERE r.id = ? AND bh.owner_id = ?
+          LIMIT 1");
+        $stmt->execute([$subscriptionModalRoomId, intval($_SESSION['user_id'])]);
+        $subscriptionModalRoom = $stmt->fetch() ?: null;
+        if ($subscriptionModalRoom) {
+            if ($subscriptionModalBhId <= 0) $subscriptionModalBhId = intval($subscriptionModalRoom['boarding_house_id'] ?? 0);
+            $subscriptionModalRoom['boarding_house_id'] = $subscriptionModalBhId;
+        }
+    } catch (Throwable $e) {
+        $subscriptionModalRoom = null;
+    }
+}
 $rooms = [];
 $pendingRequests = [];
 $roomsError = null;
@@ -401,60 +565,10 @@ require_once __DIR__ . '/../../includes/header.php';
 ?>
 
 <div class="dash-shell">
-  <aside class="dash-sidebar">
-    <a class="dash-brand" href="dashboard.php" aria-label="<?= sanitize(SITE_NAME) ?>">
-      <span class="dash-logo-wrap"><img class="dash-logo" src="<?= SITE_URL ?>/boardease-logo.png" alt="<?= sanitize(SITE_NAME) ?> logo"></span>
-      <span class="sr-only"><?= sanitize(SITE_NAME) ?></span>
-    </a>
-
-    <a class="dash-action" href="add_listing.php" title="Create a new listing">
-      <span>Add Listing</span>
-      <i class="fas fa-plus"></i>
-    </a>
-
-    <nav class="dash-nav">
-      <a href="dashboard.php"><i class="fas fa-gauge"></i> Overview</a>
-      <a class="active" href="rooms.php"><i class="fas fa-door-open"></i> Rooms</a>
-      <a href="chats.php"><i class="fas fa-comments"></i> Chats</a>
-      <a href="<?= SITE_URL ?>/index.php"><i class="fas fa-house"></i> Browse</a>
-    </nav>
-
-  </aside>
+<?php $activeNav = 'rooms'; include __DIR__ . '/_partials/sidebar.php'; ?>
 
   <div class="dash-main">
-    <div class="dash-topbar">
-      <div class="dash-search" aria-label="Search">
-        <i class="fas fa-magnifying-glass"></i>
-        <input type="search" placeholder="Search..." disabled>
-      </div>
-
-      <div class="dash-top-actions">
-        <a class="dash-icon-btn" href="chats.php" title="Chats" aria-label="Chats"><i class="fas fa-comments"></i></a>
-
-        <div class="nav-user">
-          <button class="user-btn" id="userBtn" type="button">
-            <span class="user-avatar"><?= strtoupper(substr(sanitize($me['full_name'] ?? 'U'), 0, 1)) ?></span>
-            <span><?= sanitize($me['full_name'] ?? 'Property Owner') ?></span>
-            <i class="fas fa-chevron-down" style="font-size:0.7rem;color:var(--text-light)"></i>
-          </button>
-
-          <div class="user-dropdown" id="userDropdown">
-            <div class="dropdown-header">
-              <strong><?= sanitize($me['full_name'] ?? '') ?></strong>
-              <span><?= sanitize($me['email'] ?? '') ?></span>
-              <span class="role-badge role-owner">Property Owner</span>
-            </div>
-
-            <a href="dashboard.php"><i class="fas fa-gauge"></i> Dashboard</a>
-            <a href="rooms.php"><i class="fas fa-door-open"></i> Rooms</a>
-            <a href="chats.php"><i class="fas fa-comments"></i> Chats</a>
-            <hr>
-
-            <a class="logout-link" href="<?= SITE_URL ?>/logout.php"><i class="fas fa-right-from-bracket"></i> Logout</a>
-          </div>
-        </div>
-      </div>
-    </div>
+<?php include __DIR__ . '/_partials/topbar.php'; ?>
 
     <div class="dash-content">
       <div class="dash-heading">
@@ -556,7 +670,7 @@ require_once __DIR__ . '/../../includes/header.php';
                         <input name="room_image" type="file" accept="image/jpeg,image/png,image/webp">
                         <div class="file-upload-icon"><i class="fas fa-cloud-upload-alt"></i></div>
                         <p class="file-upload-text"><strong>Click to upload</strong> or drag & drop</p>
-                        <p class="file-upload-text" style="font-size:.76rem;margin-top:4px">JPG, PNG, or WebP · Max 5MB</p>
+                        <p class="file-upload-text" style="font-size:.76rem;margin-top:4px">JPG, PNG, or WebP ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¾Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¦ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· Max 5MB</p>
                       </div>
                       <div class="file-preview room-inline-preview"></div>
                     </div>
@@ -608,7 +722,7 @@ require_once __DIR__ . '/../../includes/header.php';
                             if ($acur > $acap) $acur = $acap;
                           ?>
                           <div class="text-muted text-sm" style="margin-top:4px">
-                            Room: <strong><?= sanitize($assignRoom['room_name'] ?? '') ?></strong> · Occupancy: <?= $acur ?>/<?= $acap ?>
+                            Room: <strong><?= sanitize($assignRoom['room_name'] ?? '') ?></strong> ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¾Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¦ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· Occupancy: <?= $acur ?>/<?= $acap ?>
                           </div>
                         <?php else: ?>
                           <div class="text-muted text-sm" style="margin-top:4px">That room was not found.</div>
@@ -696,6 +810,7 @@ require_once __DIR__ . '/../../includes/header.php';
                           <th>Capacity</th>
                           <th>Occupancy</th>
                           <th>Status</th>
+                          <?php if ($hasRoomSubscription): ?><th>Subscription</th><?php endif; ?>
                           <th style="width:260px">Actions</th>
                         </tr>
                       </thead>
@@ -805,17 +920,56 @@ require_once __DIR__ . '/../../includes/header.php';
                                   </select>
                                 </div>
                               </td>
+                              <?php if ($hasRoomSubscription): ?>
                               <td>
-                                <div class="flex flex-wrap gap-2 room-row-actions">
-                                  <button class="btn btn-ghost btn-sm room-edit-toggle" type="button"><i class="fas fa-pen-to-square"></i> Update</button>
-                                  <button class="btn btn-primary btn-sm room-save-btn" type="submit" name="action" value="update_room"><i class="fas fa-floppy-disk"></i> Save</button>
-                                  <button class="btn btn-ghost btn-sm room-cancel-btn" type="button"><i class="fas fa-xmark"></i> Cancel</button>
-                                  <?php if ($cur < $cap && $status === 'available'): ?>
-                                    <a class="btn btn-primary btn-sm room-assign-btn" href="rooms.php?bh_id=<?= intval($selectedBhId) ?>&assign_room_id=<?= intval($r['id']) ?>#assign"><i class="fas fa-user-plus"></i> Assign Tenant</a>
+                                <?php
+                                  $sub = strtolower((string)($r['subscription_status'] ?? 'inactive'));
+                                  $sEnd = trim((string)($r['end_date'] ?? ''));
+                                  if ($sub === 'active' && $sEnd !== '' && strtotime($sEnd) < strtotime(date('Y-m-d'))) {
+                                      $sub = 'expired';
+                                  }
+                                ?>
+                                <div class="room-cell-display">
+                                  <span class="badge" style="background:var(--bg);border:1px solid var(--border)"><?= sanitize($sub) ?></span>
+                                  <?php if ($sEnd !== ''): ?>
+                                    <div class="text-muted text-xs" style="margin-top:6px">Until <?= sanitize(date('M d, Y', strtotime($sEnd))) ?></div>
                                   <?php endif; ?>
-                                  <button class="btn btn-danger btn-sm" type="submit" name="action" value="delete_room" onclick="return confirm('Delete this room?');"><i class="fas fa-trash"></i> Delete</button>
+                                </div>
+                                <div class="room-cell-edit">
+                                  <div class="room-subscription-panel">
+  <div class="text-muted text-xs room-subscription-price">Per-room subscription: <?= formatPrice((float)$subscriptionAmount) ?> / <?= intval($subscriptionDays) ?> days</div>
+  <?php if ($sub !== 'active'): ?>
+    <div class="room-subscription-upload">
+      <div class="file-upload file-upload-compact">
+        <input name="payment_proof" type="file" accept="image/jpeg,image/png,image/webp">
+        <div class="file-upload-icon"><i class="fas fa-receipt"></i></div>
+        <p class="file-upload-text"><strong>Upload receipt</strong></p>
+        <p class="file-upload-text" style="font-size:.74rem;margin-top:4px">JPG, PNG, or WebP</p>
+      </div>
+      <div class="file-preview room-inline-preview"></div>
+    </div>
+    <div class="room-subscription-actions">
+      <button class="btn btn-ghost btn-sm" type="submit" name="action" value="pay_subscription" formnovalidate><i class="fas fa-file-upload"></i> Submit Receipt</button>
+      <button class="btn btn-primary btn-sm" type="submit" formaction="paypal_start.php" formmethod="post" formnovalidate <?= paypalEnabled() ? "" : "disabled" ?> title="<?= paypalEnabled() ? "Pay with PayPal Sandbox" : "Set PAYPAL_CLIENT_ID and PAYPAL_SECRET to enable PayPal" ?>"><i class="fab fa-paypal"></i> Pay with PayPal (Sandbox)</button>
+    </div>
+  <?php else: ?>
+    <div class="text-muted text-xs">Active subscription.</div>
+  <?php endif; ?>
+</div>
                                 </div>
                               </td>
+                              <?php endif; ?>
+                              <td>
+                                <div class="room-row-actions">
+  <button class="btn btn-ghost btn-sm room-edit-toggle btn-icon" type="button" title="Update" aria-label="Update"><i class="fas fa-pen-to-square"></i><span class="sr-only">Update</span></button>
+  <button class="btn btn-primary btn-sm room-save-btn btn-icon" type="submit" name="action" value="update_room" title="Save" aria-label="Save"><i class="fas fa-floppy-disk"></i><span class="sr-only">Save</span></button>
+  <button class="btn btn-ghost btn-sm room-cancel-btn btn-icon" type="button" title="Cancel" aria-label="Cancel"><i class="fas fa-xmark"></i><span class="sr-only">Cancel</span></button>
+  <?php if ($cur < $cap && $status === 'available'): ?>
+    <a class="btn btn-primary btn-sm room-assign-btn btn-icon" href="rooms.php?bh_id=<?= intval($selectedBhId) ?>&assign_room_id=<?= intval($r['id']) ?>#assign" title="Assign Tenant" aria-label="Assign Tenant"><i class="fas fa-user-plus"></i><span class="sr-only">Assign Tenant</span></a>
+  <?php endif; ?>
+  <button class="btn btn-danger btn-sm btn-icon" type="submit" name="action" value="delete_room" onclick="return confirm('Delete this room?');" title="Delete" aria-label="Delete"><i class="fas fa-trash"></i><span class="sr-only">Delete</span></button>
+</div>
+</td>
                             </form>
                           </tr>
                         <?php endforeach; ?>
@@ -892,5 +1046,99 @@ require_once __DIR__ . '/../../includes/header.php';
   </div>
 </div>
 
+
+<?php if ($subscriptionModalRoom && strtolower((string)($subscriptionModalRoom["subscription_status"] ?? "inactive")) !== "active"): ?>
+  <?php
+    $mRoomId = intval($subscriptionModalRoom['id'] ?? 0);
+    $mBhId = intval($subscriptionModalRoom['boarding_house_id'] ?? 0);
+    if ($mBhId <= 0) $mBhId = $selectedBhId;
+    $mRoomName = sanitize((string)($subscriptionModalRoom['room_name'] ?? ''));
+  ?>
+  <div class="be-modal open" id="subscriptionModal" aria-hidden="false">
+    <div class="be-modal__backdrop" data-close-modal></div>
+    <div class="be-modal__dialog" role="dialog" aria-modal="true" aria-labelledby="subscriptionModalTitle">
+      <div class="be-modal__header">
+        <h3 class="be-modal__title" id="subscriptionModalTitle">Activate room subscription</h3>
+        <button class="btn btn-ghost btn-sm" type="button" data-close-modal><i class="fas fa-xmark"></i> Close</button>
+      </div>
+      <div class="be-modal__body">
+        <div class="text-muted text-sm" style="margin-bottom:12px">
+          Room <span class="font-bold"><?= $mRoomName !== '' ? $mRoomName : ('#' . $mRoomId) ?></span> was added. To make it available to tenants, pay the subscription.
+          <div class="text-muted text-xs" style="margin-top:6px">Per-room subscription: <?= formatPrice((float)$subscriptionAmount) ?> / <?= intval($subscriptionDays) ?> days</div>
+        </div>
+
+        <div class="be-subscribe-grid">
+          <div class="be-subscribe-card">
+            <h4 class="be-subscribe-title"><i class="fab fa-paypal"></i> Pay with PayPal</h4>
+            <p class="text-muted text-sm" style="margin-top:6px">Fastest option. YouÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ll be redirected to PayPal checkout.</p>
+            <form method="POST" action="paypal_start.php" style="margin-top:12px">
+              <input type="hidden" name="room_id" value="<?= $mRoomId ?>">
+              <input type="hidden" name="bh_id" value="<?= $mBhId ?>">
+              <button class="btn btn-primary" type="submit" <?= paypalEnabled() ? "" : "disabled" ?> title="<?= paypalEnabled() ? "Pay with PayPal Sandbox" : "Set PAYPAL_CLIENT_ID and PAYPAL_SECRET to enable PayPal" ?>">
+                <i class="fab fa-paypal"></i> Pay with PayPal (Sandbox)
+              </button>
+            </form>
+          </div>
+
+          <div class="be-subscribe-card">
+            <h4 class="be-subscribe-title"><i class="fas fa-receipt"></i> Upload receipt</h4>
+            <p class="text-muted text-sm" style="margin-top:6px">If you paid outside PayPal, upload a receipt screenshot for admin approval.</p>
+
+            <form method="POST" action="rooms.php?bh_id=<?= $mBhId ?>#rooms" enctype="multipart/form-data" style="margin-top:12px">
+              <input type="hidden" name="action" value="pay_subscription">
+              <input type="hidden" name="bh_id" value="<?= $mBhId ?>">
+              <input type="hidden" name="room_id" value="<?= $mRoomId ?>">
+
+              <div class="room-subscription-upload">
+                <div class="file-upload file-upload-compact">
+                  <input name="payment_proof" type="file" accept="image/jpeg,image/png,image/webp" required>
+                  <div class="file-upload-icon"><i class="fas fa-receipt"></i></div>
+                  <p class="file-upload-text"><strong>Upload receipt</strong></p>
+                  <p class="file-upload-text" style="font-size:.74rem;margin-top:4px">JPG, PNG, or WebP</p>
+                </div>
+                <div class="file-preview"></div>
+              </div>
+
+              <button class="btn btn-ghost" type="submit" style="margin-top:10px">
+                <i class="fas fa-file-upload"></i> Submit Receipt
+              </button>
+            </form>
+          </div>
+        </div>
+      </div>
+
+      <div class="be-modal__footer">
+        <button class="btn btn-ghost btn-sm" type="button" data-close-modal>Later</button>
+      </div>
+    </div>
+  </div>
+<?php endif; ?>
 <?php require_once __DIR__ . '/../../includes/footer.php'; ?>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 

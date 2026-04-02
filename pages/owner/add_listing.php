@@ -1,10 +1,14 @@
-﻿<?php
+<?php
 require_once __DIR__ . '/../../includes/config.php';
 requireOwner();
+requireVerifiedOwner();
+requireActiveOwnerSubscriptionForListingCreate();
+
 
 $pageTitle = 'Add New Listing';
 $db = getDB();
 $currentUser = getCurrentUser() ?: [];
+$activeSub = getActiveOwnerSubscription(intval($_SESSION['user_id'] ?? 0));
 
 function enumValuesFromColumns(array $columns, string $field): array {
     foreach ($columns as $col) {
@@ -32,6 +36,9 @@ $hasContactEmail = $hasCol('contact_email');
 $hasApprovalStatusCol = $hasCol('approval_status');
 $hasTotalRooms = $hasCol('total_rooms');
 $hasAvailableRooms = $hasCol('available_rooms');
+$hasIsActiveCol = $hasCol('is_active');
+$hasExpiresAtCol = $hasCol('expires_at');
+$hasSubscriptionIdCol = $hasCol('subscription_id');
 
 $statusValues = enumValuesFromColumns($bhColumns, 'status');
 if (empty($statusValues)) $statusValues = ['active','inactive'];
@@ -43,8 +50,6 @@ $formData = [
     'city'               => '',
     'description'        => '',
     'rules'              => '',
-    'price_min'          => '',
-    'price_max'          => '',
     'contact_phone'      => $currentUser['phone'] ?? '',
     'contact_email'      => $currentUser['email'] ?? '',
 ];
@@ -58,8 +63,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         'city'               => trim($_POST['city'] ?? ''),
         'description'        => trim($_POST['description'] ?? ''),
         'rules'              => trim($_POST['rules'] ?? ''),
-        'price_min'          => floatval($_POST['price_min'] ?? 0),
-        'price_max'          => floatval($_POST['price_max'] ?? 0),
         'contact_phone'      => trim($_POST['contact_phone'] ?? ''),
         'contact_email'      => trim($_POST['contact_email'] ?? ''),
     ];
@@ -68,7 +71,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (empty($formData['name']))     $errors['name']      = 'Property name is required.';
     if (empty($formData['location'])) $errors['location']  = 'Location is required.';
     if (empty($formData['city']))     $errors['city']      = 'City is required.';
-    if ($formData['price_min'] <= 0)  $errors['price_min'] = 'Minimum price must be greater than 0.';
 
     if (empty($errors)) {
         $cols = ['owner_id', 'name'];
@@ -81,8 +83,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $cols[] = 'city'; $vals[] = $formData['city'];
         $cols[] = 'description'; $vals[] = $formData['description'];
         $cols[] = 'rules'; $vals[] = $formData['rules'];
-        $cols[] = 'price_min'; $vals[] = $formData['price_min'];
-        $cols[] = 'price_max'; $vals[] = $formData['price_max'] ?: null;
 
         if ($hasStatus) { $cols[] = 'status'; $vals[] = $defaultStatus; }
         if ($hasContactPhone) { $cols[] = 'contact_phone'; $vals[] = $formData['contact_phone']; }
@@ -92,6 +92,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         // If room counts are present, initialize to 0 so new listings don't show as 1/1 by default.
         if ($hasTotalRooms) { $cols[] = 'total_rooms'; $vals[] = 0; }
         if ($hasAvailableRooms) { $cols[] = 'available_rooms'; $vals[] = 0; }
+
+        if ($hasIsActiveCol) { $cols[] = 'is_active'; $vals[] = 1; }
+        if ($hasExpiresAtCol && is_array($activeSub) && !empty($activeSub['end_date'])) { $cols[] = 'expires_at'; $vals[] = (string)($activeSub['end_date']) . ' 23:59:59'; }
+        if ($hasSubscriptionIdCol && is_array($activeSub)) { $cols[] = 'subscription_id'; $vals[] = (intval($activeSub['id'] ?? 0) > 0) ? intval($activeSub['id']) : null; }
 
         $placeholders = implode(',', array_fill(0, count($cols), '?'));
         $sql = "INSERT INTO boarding_houses (" . implode(',', $cols) . ") VALUES ($placeholders)";
@@ -139,48 +143,10 @@ require_once __DIR__ . '/../../includes/header.php';
 
 <?php $me = getCurrentUser(); ?>
 <div class="dash-shell">
-  <aside class="dash-sidebar">
-    <a class="dash-brand" href="dashboard.php" aria-label="<?= sanitize(SITE_NAME) ?>">
-      <span class="dash-logo-wrap"><img class="dash-logo" src="<?= SITE_URL ?>/boardease-logo.png" alt="<?= sanitize(SITE_NAME) ?> logo"></span>
-      <span class="sr-only"><?= sanitize(SITE_NAME) ?></span>
-    </a>
-
-    <a class="dash-action" href="add_listing.php" title="Create a new listing">
-      <span>Add Listing</span>
-      <i class="fas fa-plus"></i>
-    </a>
-
-    <nav class="dash-nav">
-      <a href="dashboard.php"><i class="fas fa-gauge"></i> Overview</a>
-      <a href="rooms.php"><i class="fas fa-door-open"></i> Rooms</a>
-      <a href="chats.php"><i class="fas fa-comments"></i> Chats</a>
-      <a href="<?= SITE_URL ?>/index.php"><i class="fas fa-house"></i> Browse</a>
-    </nav>
-
-  </aside>
+<?php $activeNav = 'dashboard'; include __DIR__ . '/_partials/sidebar.php'; ?>
 
   <div class="dash-main">
-    <div class="dash-topbar">
-      <div class="dash-search" aria-label="Search">
-        <i class="fas fa-magnifying-glass"></i>
-        <input type="search" placeholder="Search...">
-      </div>
-
-      <div class="dash-top-actions">
-        <button class="dash-icon-btn" type="button" title="Notifications" aria-label="Notifications">
-          <i class="far fa-bell"></i>
-        </button>
-
-        <div class="dash-user" aria-label="Account">
-          <div class="dash-avatar"><?= strtoupper(substr(sanitize($me['full_name'] ?? 'U'), 0, 1)) ?></div>
-          <div class="dash-user-meta">
-            <strong><?= sanitize($me['full_name'] ?? 'Property Owner') ?></strong>
-            <span>Property Owner</span>
-          </div>
-          <i class="fas fa-chevron-down" style="font-size:.75rem;color:#9CA3AF"></i>
-        </div>
-      </div>
-    </div>
+<?php include __DIR__ . '/_partials/topbar.php'; ?>
 
     <div class="dash-content">
       <div class="dash-heading">
@@ -212,7 +178,7 @@ require_once __DIR__ . '/../../includes/header.php';
           <div class="form-group">
             <label class="form-label">Street Address / Location <span class="required">*</span></label>
             <input type="text" name="location" class="form-control <?= isset($errors['location'])?'error':'' ?>"
-                   placeholder="e.g. 123 OsmeÃ±a Blvd" value="<?= sanitize($formData['location']) ?>" required>
+                   placeholder="e.g. 123 OsmeÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¾Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¾ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â±a Blvd" value="<?= sanitize($formData['location']) ?>" required>
             <?php if (isset($errors['location'])): ?><p class="form-error"><i class="fas fa-exclamation-circle"></i><?= $errors['location'] ?></p><?php endif; ?>
           </div>
           <div class="form-group">
@@ -234,30 +200,11 @@ require_once __DIR__ . '/../../includes/header.php';
       </div>
     </div>
 
-    <!-- Pricing & Rooms -->
+    <!-- Rooms & Pricing -->
     <div class="card mb-4">
-      <div class="card-header"><h2 style="font-family:var(--font-display);font-size:1.1rem;font-weight:700"><span class="currency-icon" style="color:var(--primary)">&#8369;</span> Pricing & Rooms</h2></div>
+      <div class="card-header"><h2 style="font-family:var(--font-display);font-size:1.1rem;font-weight:700"><i class="fas fa-tags" style="color:var(--primary)"></i> Rooms & Pricing</h2></div>
       <div class="card-body">
-        <div class="form-row">
-          <div class="form-group">
-            <label class="form-label">Minimum Price (&#8369;/month) <span class="required">*</span></label>
-            <div class="input-icon"><span class="currency-icon">&#8369;</span>
-              <input type="number" name="price_min" class="form-control <?= isset($errors['price_min'])?'error':'' ?>"
-                     placeholder="2500" value="<?= $formData['price_min']?:'' ?>" min="1" step="0.01" required id="minPrice">
-            </div>
-            <?php if (isset($errors['price_min'])): ?><p class="form-error"><i class="fas fa-exclamation-circle"></i><?= $errors['price_min'] ?></p><?php endif; ?>
-          </div>
-          <div class="form-group">
-            <label class="form-label">Maximum Price (&#8369;/month)</label>
-            <div class="input-icon"><span class="currency-icon">&#8369;</span>
-              <input type="number" name="price_max" class="form-control"
-                     placeholder="Optional" value="<?= $formData['price_max']?:'' ?>" min="0" step="0.01" id="maxPrice">
-            </div>
-          </div>
-        </div>
-        <div class="form-row">
-          <p class="text-muted text-sm" style="margin:0">Room count and availability are managed in <a href="rooms.php">Room Management</a>.</p>
-        </div>
+        <p class="text-muted text-sm" style="margin:0">Pricing is based on your room prices. Add rooms and set prices in <a href="rooms.php">Room Management</a>.</p>
       </div>
     </div>
 
@@ -305,7 +252,7 @@ require_once __DIR__ . '/../../includes/header.php';
           <input type="file" name="images[]" accept="image/jpeg,image/png,image/webp" multiple>
           <div class="file-upload-icon"><i class="fas fa-cloud-upload-alt"></i></div>
           <p class="file-upload-text"><strong>Click to upload</strong> or drag & drop</p>
-          <p class="file-upload-text" style="font-size:.8rem;margin-top:4px">JPEG, PNG, WebP Â· Max 5MB per image Â· First image becomes the cover</p>
+          <p class="file-upload-text" style="font-size:.8rem;margin-top:4px">JPEG, PNG, WebP ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¾Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¦ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· Max 5MB per image ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¾Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¦ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· First image becomes the cover</p>
         </div>
         <div class="file-preview" style="display:flex;flex-wrap:wrap;gap:10px;margin-top:16px">
           <style>

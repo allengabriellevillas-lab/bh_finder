@@ -1,4 +1,4 @@
-﻿<?php
+<?php
 require_once __DIR__ . '/config.php';
 
 $pageTitle = $pageTitle ?? SITE_NAME;
@@ -13,8 +13,9 @@ $isHome = ($scriptName === '' || $scriptName === 'index.php');
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="site-url" content="<?= SITE_URL ?>">
   <title><?= sanitize($pageTitle) ?><?= $pageTitle !== SITE_NAME ? ' | ' . SITE_NAME : '' ?></title>
-  <link rel="stylesheet" href="<?= SITE_URL ?>/style.css">
+  <link rel="stylesheet" href="<?= SITE_URL ?>/style.css?v=<?= intval(@filemtime(__DIR__ . "/../style.css") ?: time()) ?>">
   <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
 </head>
@@ -50,6 +51,11 @@ if ($showNavbar): ?>
           <a class="nav-link btn-outline-sm" href="<?= SITE_URL ?>/login.php"><i class="fas fa-right-to-bracket"></i> Login</a>
           <a class="nav-link btn-primary-sm" href="<?= SITE_URL ?>/register.php?role=owner"><i class="fas fa-plus"></i> List Property</a>
         <?php else: ?>
+          <?php $notifCount = notificationsEnabled() ? unreadNotificationCount(intval($_SESSION['user_id'] ?? 0)) : 0; ?>
+          <a class="nav-link" href="<?= SITE_URL ?>/pages/notifications.php" title="Notifications" aria-label="Notifications" style="position:relative">
+            <i class="far fa-bell"></i>
+            <?php if ($notifCount > 0): ?><span class="dash-icon-badge" style="position:absolute;top:-6px;right:-8px"><?= $notifCount > 99 ? '99+' : intval($notifCount) ?></span><?php endif; ?>
+          </a>
           <div class="nav-user">
             <button class="user-btn" id="userBtn" type="button">
               <span class="user-avatar"><?= strtoupper(substr(sanitize($currentUser['full_name'] ?? 'U'), 0, 1)) ?></span>
@@ -89,4 +95,6 @@ if ($showNavbar): ?>
     </div>
   </nav>
 <?php endif;
+
+
 

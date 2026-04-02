@@ -1,8 +1,9 @@
-﻿<?php
+<?php
 require_once __DIR__ . '/../../includes/config.php';
 requireAdmin();
 
 $db = getDB();
+ensurePaymentsSubscriptionIdColumn();
 
 $showNavbar = false;
 
@@ -46,12 +47,14 @@ function adminSidebar(string $active): void {
         ['k' => 'dashboard', 'label' => 'Dashboard', 'icon' => 'fa-gauge', 'href' => 'dashboard.php'],
         ['k' => 'users', 'label' => 'Users', 'icon' => 'fa-users', 'href' => 'users.php'],
         ['k' => 'owners', 'label' => 'Owner Verification', 'icon' => 'fa-user-check', 'href' => 'owners.php'],
-        ['k' => 'listings', 'label' => 'Listings', 'icon' => 'fa-building', 'href' => 'listings.php'],
+        ['k' => 'listings', 'label' => 'Property Listings', 'icon' => 'fa-building', 'href' => 'listings.php'],
         ['k' => 'reports', 'label' => 'Reports', 'icon' => 'fa-flag', 'href' => 'reports.php'],
         ['k' => 'content', 'label' => 'Content', 'icon' => 'fa-bullhorn', 'href' => 'content.php'],
         ['k' => 'searches', 'label' => 'Search Logs', 'icon' => 'fa-magnifying-glass', 'href' => 'searches.php'],
         ['k' => 'settings', 'label' => 'Settings', 'icon' => 'fa-gear', 'href' => 'settings.php'],
         ['k' => 'exports', 'label' => 'Exports', 'icon' => 'fa-file-export', 'href' => 'exports.php'],
+        ['k' => 'payments', 'label' => 'Payments', 'icon' => 'fa-receipt', 'href' => 'payments.php'],
+        ['k' => 'warnings', 'label' => 'Warnings', 'icon' => 'fa-triangle-exclamation', 'href' => 'warnings.php'],
     ];
 
     $me = getCurrentUser();
@@ -67,6 +70,9 @@ function adminSidebar(string $active): void {
             <i class="fas fa-plus"></i>
         </a>
 
+
+        <div class="dash-section-label">Admin Pages</div>
+
         <nav class="dash-nav">
             <?php foreach ($items as $it): ?>
                 <a class="<?= $active === $it['k'] ? 'active' : '' ?>" href="<?= sanitize($it['href']) ?>">
@@ -75,20 +81,6 @@ function adminSidebar(string $active): void {
             <?php endforeach; ?>
         </nav>
 
-        <div class="dash-sidebar-footer">
-            <div class="dash-me">
-                <div class="dash-avatar"><?= strtoupper(substr(sanitize($me['full_name'] ?? 'A'), 0, 1)) ?></div>
-                <div>
-                    <strong style="display:block;font-size:.92rem"><?= sanitize($me['full_name'] ?? 'Admin') ?></strong>
-                    <small><?= sanitize($me['email'] ?? '') ?></small>
-                </div>
-            </div>
-
-            <div class="dash-nav" style="margin-top:6px">
-                <a href="<?= SITE_URL ?>/index.php"><i class="fas fa-house"></i> Back to site</a>
-                <a href="<?= SITE_URL ?>/logout.php"><i class="fas fa-right-from-bracket"></i> Logout</a>
-            </div>
-        </div>
     </aside>
     <?php
 }
@@ -112,6 +104,7 @@ function adminTopbar(): void {
         </div>
 
         <div class="dash-top-actions">
+
             <a class="dash-icon-btn" href="reports.php" title="Reports" aria-label="Reports">
                 <i class="far fa-bell"></i>
                 <?php if ($openReports > 0): ?>
@@ -135,7 +128,7 @@ function adminTopbar(): void {
 
                 <a href="dashboard.php"><i class="fas fa-gauge"></i> Dashboard</a>
                 <a href="users.php"><i class="fas fa-users"></i> Users</a>
-                <a href="listings.php"><i class="fas fa-building"></i> Listings</a>
+                <a href="listings.php"><i class="fas fa-building"></i> Property Listings</a>
                 <a href="reports.php"><i class="fas fa-flag"></i> Reports</a>
                 <hr>
 
@@ -147,6 +140,10 @@ function adminTopbar(): void {
     </div>
     <?php
 }
+
+
+
+
 
 
 

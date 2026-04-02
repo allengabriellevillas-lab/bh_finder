@@ -1,4 +1,4 @@
-﻿<?php
+<?php
 require_once __DIR__ . '/../../includes/config.php';
 requireOwner();
 
@@ -33,7 +33,7 @@ if (!$thread) {
     exit;
 }
 
-$pageTitle = 'Chat · ' . sanitize($thread['bh_name'] ?? 'Listing');
+$pageTitle = 'Chat Ãƒâ€šÃ‚Â· ' . sanitize($thread['bh_name'] ?? 'Listing');
 
 // Send message
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['send_message'])) {
@@ -54,6 +54,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['send_message'])) {
             }
             $db->prepare("UPDATE chat_threads SET last_message_at = NOW() WHERE id = ?")
                ->execute([intval($thread['id'])]);
+             // Notification (best-effort)
+             try { notifyNewChatMessage($db, intval($thread['id']), $uid); } catch (Throwable $e) {}
         } catch (Throwable $e) {
             setFlash('error', 'Failed to send message.');
         }
@@ -103,45 +105,22 @@ require_once __DIR__ . '/../../includes/header.php';
 
 <?php $me = getCurrentUser(); ?>
 <div class="dash-shell">
-  <aside class="dash-sidebar">
-    <a class="dash-brand" href="dashboard.php" aria-label="<?= sanitize(SITE_NAME) ?>">
-      <span class="dash-logo-wrap"><img class="dash-logo" src="<?= SITE_URL ?>/boardease-logo.png" alt="<?= sanitize(SITE_NAME) ?> logo"></span>
-      <span class="sr-only"><?= sanitize(SITE_NAME) ?></span>
-    </a>
-
-    <a class="dash-action" href="add_listing.php" title="Create a new listing">
-      <span>Add Listing</span>
-      <i class="fas fa-plus"></i>
-    </a>
-
-    <nav class="dash-nav">
-      <a href="dashboard.php"><i class="fas fa-gauge"></i> Overview</a>
-      <a href="rooms.php"><i class="fas fa-door-open"></i> Rooms</a>
-      <a class="active" href="chats.php"><i class="fas fa-comments"></i> Chats <?php if ($unreadCount > 0): ?><span class="sidebar-badge"><?= $unreadCount ?></span><?php endif; ?></a>
-      <a href="<?= SITE_URL ?>/index.php"><i class="fas fa-house"></i> Browse</a>
-    </nav>
-
-  </aside>
+<?php $activeNav = 'chats'; include __DIR__ . '/_partials/sidebar.php'; ?>
 
   <div class="dash-main">
-    <div class="dash-topbar">
-      <div class="dash-search" aria-label="Search">
-        <i class="fas fa-comments"></i>
-        <input type="search" value="Chat" disabled>
-      </div>
+<?php include __DIR__ . '/_partials/topbar.php'; ?>
 
-      <div class="dash-top-actions">
-        <a class="btn btn-ghost btn-sm" href="chats.php"><i class="fas fa-arrow-left"></i> Back</a>
-      </div>
-    </div>
-
+    <div class="dash-content" style="padding-top:16px">
     <div class="dash-content" style="padding-top:16px">
       <div class="chat-header" style="margin-bottom:16px">
         <div style="min-width:0">
           <div class="chat-title"><?= sanitize($thread['bh_name'] ?? 'Listing') ?></div>
           <div class="text-muted text-sm">Chatting with <?= sanitize($thread['tenant_name'] ?? 'Tenant') ?></div>
         </div>
-        <a class="btn btn-ghost btn-sm" href="<?= SITE_URL ?>/pages/detail.php?id=<?= intval($thread['boarding_house_id'] ?? 0) ?>"><i class="fas fa-eye"></i> View Listing</a>
+        <div class="flex gap-2">
+          <a class="btn btn-ghost btn-sm" href="chats.php"><i class="fas fa-arrow-left"></i> Back</a>
+          <a class="btn btn-ghost btn-sm" href="<?= SITE_URL ?>/pages/detail.php?id=<?= intval($thread['boarding_house_id'] ?? 0) ?>"><i class="fas fa-eye"></i> View Listing</a>
+        </div>
       </div>
 
       <div class="chat-box" id="chatBox" data-thread-id="<?= intval($thread['id']) ?>" data-user-id="<?= intval($uid) ?>" data-messages-url="<?= SITE_URL ?>/api/chat_messages.php" data-send-url="<?= SITE_URL ?>/api/chat_send.php">
@@ -182,6 +161,8 @@ require_once __DIR__ . '/../../includes/header.php';
 
 
 <?php require_once __DIR__ . '/../../includes/footer.php'; ?>
+
+
 
 
 

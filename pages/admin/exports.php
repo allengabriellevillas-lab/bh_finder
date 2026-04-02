@@ -1,4 +1,4 @@
-﻿<?php
+<?php
 require_once __DIR__ . '/_common.php';
 
 $pageTitle = 'Exports';
@@ -93,7 +93,7 @@ require_once __DIR__ . '/../../includes/header.php';
           <p class="text-muted" style="margin-bottom:14px">Download CSV exports as a simple backup or for analytics.</p>
           <div class="flex flex-wrap gap-2">
             <a class="btn btn-primary btn-sm" href="exports.php?download=users"><i class="fas fa-download"></i> Users</a>
-            <a class="btn btn-primary btn-sm" href="exports.php?download=listings"><i class="fas fa-download"></i> Listings</a>
+            <a class="btn btn-primary btn-sm" href="exports.php?download=listings"><i class="fas fa-download"></i> Property Listings</a>
             <a class="btn btn-primary btn-sm" href="exports.php?download=reports"><i class="fas fa-download"></i> Reports</a>
             <a class="btn btn-primary btn-sm" href="exports.php?download=search_logs"><i class="fas fa-download"></i> Search Logs</a>
           </div>
@@ -108,6 +108,7 @@ require_once __DIR__ . '/../../includes/header.php';
 </div>
 
 <?php require_once __DIR__ . '/../../includes/footer.php'; ?>
+
 
 
 

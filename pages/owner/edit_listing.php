@@ -1,4 +1,4 @@
-﻿<?php
+<?php
 require_once __DIR__ . '/../../includes/config.php';
 requireOwner();
 
@@ -50,6 +50,7 @@ foreach ($typeValues as $v) {
 
 $statusLabels = [
     'active'   => 'Active',
+    'available'=> 'Active',
     'inactive' => 'Inactive',
     'full'     => 'Full',
     'pending'  => 'Pending',
@@ -96,8 +97,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         'city'               => trim($_POST['city'] ?? ''),
         'description'        => trim($_POST['description'] ?? ''),
         'rules'              => trim($_POST['rules'] ?? ''),
-        'price_min'          => floatval($_POST['price_min'] ?? 0),
-        'price_max'          => floatval($_POST['price_max'] ?? 0),
         'accommodation_type' => in_array($submittedType, $typeValues, true) ? $submittedType : $defaultType,
         'status'             => in_array($submittedStatus, $statusValues, true) ? $submittedStatus : $defaultStatus,
         'contact_phone'      => trim($_POST['contact_phone'] ?? ''),
@@ -108,7 +107,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (empty($formData['name']))     $errors['name']      = 'Property name is required.';
     if (empty($formData['location'])) $errors['location']  = 'Location is required.';
     if (empty($formData['city']))     $errors['city']      = 'City is required.';
-    if ($formData['price_min'] <= 0)  $errors['price_min'] = 'Minimum price must be greater than 0.';
 
     if (empty($errors)) {
         $set = [];
@@ -122,8 +120,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $set[] = 'city=?'; $vals[] = $formData['city'];
         $set[] = 'description=?'; $vals[] = $formData['description'];
         $set[] = 'rules=?'; $vals[] = $formData['rules'];
-        $set[] = 'price_min=?'; $vals[] = $formData['price_min'];
-        $set[] = 'price_max=?'; $vals[] = $formData['price_max'] ?: null;
         $set[] = 'accommodation_type=?'; $vals[] = $formData['accommodation_type'];
 
         if ($hasStatusCol) { $set[] = 'status=?'; $vals[] = $formData['status']; }
@@ -245,48 +241,10 @@ require_once __DIR__ . '/../../includes/header.php';
 
 <?php $me = getCurrentUser(); ?>
 <div class="dash-shell">
-  <aside class="dash-sidebar">
-    <a class="dash-brand" href="dashboard.php" aria-label="<?= sanitize(SITE_NAME) ?>">
-      <span class="dash-logo-wrap"><img class="dash-logo" src="<?= SITE_URL ?>/boardease-logo.png" alt="<?= sanitize(SITE_NAME) ?> logo"></span>
-      <span class="sr-only"><?= sanitize(SITE_NAME) ?></span>
-    </a>
-
-    <a class="dash-action" href="add_listing.php" title="Create a new listing">
-      <span>Add Listing</span>
-      <i class="fas fa-plus"></i>
-    </a>
-
-    <nav class="dash-nav">
-      <a href="dashboard.php"><i class="fas fa-gauge"></i> Overview</a>
-      <a href="rooms.php"><i class="fas fa-door-open"></i> Rooms</a>
-      <a href="chats.php"><i class="fas fa-comments"></i> Chats</a>
-      <a href="<?= SITE_URL ?>/index.php"><i class="fas fa-house"></i> Browse</a>
-    </nav>
-
-  </aside>
+<?php $activeNav = 'dashboard'; include __DIR__ . '/_partials/sidebar.php'; ?>
 
   <div class="dash-main">
-    <div class="dash-topbar">
-      <div class="dash-search" aria-label="Search">
-        <i class="fas fa-magnifying-glass"></i>
-        <input type="search" placeholder="Search...">
-      </div>
-
-      <div class="dash-top-actions">
-        <button class="dash-icon-btn" type="button" title="Notifications" aria-label="Notifications">
-          <i class="far fa-bell"></i>
-        </button>
-
-        <div class="dash-user" aria-label="Account">
-          <div class="dash-avatar"><?= strtoupper(substr(sanitize($me['full_name'] ?? 'U'), 0, 1)) ?></div>
-          <div class="dash-user-meta">
-            <strong><?= sanitize($me['full_name'] ?? 'Property Owner') ?></strong>
-            <span>Property Owner</span>
-          </div>
-          <i class="fas fa-chevron-down" style="font-size:.75rem;color:#9CA3AF"></i>
-        </div>
-      </div>
-    </div>
+<?php include __DIR__ . '/_partials/topbar.php'; ?>
 
     <div class="dash-content">
       <div class="dash-heading">
@@ -334,7 +292,7 @@ require_once __DIR__ . '/../../includes/header.php';
     </div>
 
     <div class="card mb-4">
-      <div class="card-header"><h2 style="font-family:var(--font-display);font-size:1.1rem;font-weight:700">Pricing, Rooms & Status</h2></div>
+      <div class="card-header"><h2 style="font-family:var(--font-display);font-size:1.1rem;font-weight:700">Type & Status</h2></div>
       <div class="card-body">
         <div class="form-group">
           <label class="form-label">Type</label>
@@ -344,26 +302,13 @@ require_once __DIR__ . '/../../includes/header.php';
             <?php endforeach; ?>
           </div>
         </div>
-        <div class="form-row-3">
-          <div class="form-group">
-            <label class="form-label">Min Price (â‚±) <span class="required">*</span></label>
-            <input type="number" name="price_min" class="form-control" value="<?= $formData['price_min'] ?>" min="1" required id="minPrice">
-          </div>
-          <div class="form-group">
-            <label class="form-label">Max Price (â‚±)</label>
-            <input type="number" name="price_max" class="form-control" value="<?= $formData['price_max'] ?>" min="0" id="maxPrice">
-          </div>
-          <div class="form-group">
-            <label class="form-label">Status</label>
-            <select name="status" class="form-control">
-              <option value="active" <?= $formData['status']==='active'?'selected':'' ?>>Active</option>
-              <option value="full" <?= $formData['status']==='full'?'selected':'' ?>>Full</option>
-              <option value="inactive" <?= $formData['status']==='inactive'?'selected':'' ?>>Inactive</option>
-            </select>
-          </div>
-        </div>
-        <div class="form-row">
-          <p class="text-muted text-sm" style="margin:0">Room count and availability are managed in <a href="rooms.php">Room Management</a>.</p>
+        <div class="form-group">
+          <label class="form-label">Status</label>
+          <select name="status" class="form-control">
+  <?php foreach ($statusOptions as $v => $label): ?>
+    <option value="<?= sanitize($v) ?>" <?= (string)($formData['status'] ?? '') === (string)$v ? 'selected' : '' ?>><?= sanitize($label) ?></option>
+  <?php endforeach; ?>
+</select>
         </div>
       </div>
     </div>
@@ -439,13 +384,13 @@ require_once __DIR__ . '/../../includes/header.php';
             <?php endforeach; ?>
           </div>
         </div>
-        <p class="form-hint">Click × to mark an extra photo for deletion, then save your changes.</p>
+        <p class="form-hint">Click ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â to mark an extra photo for deletion, then save your changes.</p>
         <?php endif; ?>
         <div class="file-upload" style="margin-top:12px">
           <input type="file" name="images[]" accept="image/jpeg,image/png,image/webp" multiple>
           <div class="file-upload-icon"><i class="fas fa-cloud-upload-alt"></i></div>
           <p class="file-upload-text"><strong>Add more photos</strong></p>
-          <p class="file-upload-text" style="font-size:.8rem;margin-top:4px">JPG, PNG, or WebP · Max 5MB each</p>
+          <p class="file-upload-text" style="font-size:.8rem;margin-top:4px">JPG, PNG, or WebP ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· Max 5MB each</p>
         </div>
       </div>
     </div>
@@ -462,6 +407,9 @@ require_once __DIR__ . '/../../includes/header.php';
 </div>
 
 <?php require_once __DIR__ . '/../../includes/footer.php'; ?>
+
+
+
 
 
 

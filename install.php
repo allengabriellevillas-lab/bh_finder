@@ -1,4 +1,4 @@
-﻿<?php
+<?php
 // One-time installer to create the database + tables and seed demo data.
 // After running successfully, delete this file (or restrict access) in production.
 
@@ -84,6 +84,13 @@ function ensureChatTables(): void {
       KEY idx_thread_last (last_message_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
 
+    try {
+        $db->exec("ALTER TABLE payments MODIFY COLUMN method ENUM('proof_upload','simulated','paypal') NOT NULL DEFAULT 'proof_upload'");
+    } catch (Throwable $e) {
+        // ignore
+    }
+
+
     $db->exec("CREATE TABLE IF NOT EXISTS chat_messages (
       id INT UNSIGNED NOT NULL AUTO_INCREMENT,
       thread_id INT UNSIGNED NOT NULL,
@@ -150,11 +157,30 @@ function ensureRoomTables(): void {
         // ignore if the column already exists
     }
 
+    // Room subscriptions (per-room monetization)
+    try {
+        $db->exec("ALTER TABLE rooms ADD COLUMN subscription_status ENUM('inactive','pending','active','expired') NOT NULL DEFAULT 'inactive'");
+    } catch (Throwable $e) {
+        // ignore if the column already exists
+    }
+    try {
+        $db->exec("ALTER TABLE rooms ADD COLUMN start_date DATE NULL");
+    } catch (Throwable $e) {
+        // ignore if the column already exists
+    }
+    try {
+        $db->exec("ALTER TABLE rooms ADD COLUMN end_date DATE NULL");
+    } catch (Throwable $e) {
+        // ignore if the column already exists
+    }
+    try { $db->exec("ALTER TABLE rooms ADD INDEX idx_rooms_sub_status (subscription_status)"); } catch (Throwable $e) {}
+    try { $db->exec("ALTER TABLE rooms ADD INDEX idx_rooms_sub_end (end_date)"); } catch (Throwable $e) {}
+
     $db->exec("CREATE TABLE IF NOT EXISTS room_requests (
       id INT UNSIGNED NOT NULL AUTO_INCREMENT,
       room_id INT UNSIGNED NOT NULL,
       tenant_id INT UNSIGNED NOT NULL,
-      status ENUM('pending','approved','rejected','cancelled') NOT NULL DEFAULT 'pending',
+      status ENUM('pending','approved','rejected','occupied','cancelled') NOT NULL DEFAULT 'pending',
       move_in_date DATE NULL,
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
@@ -163,6 +189,13 @@ function ensureRoomTables(): void {
       KEY idx_rr_tenant (tenant_id),
       KEY idx_rr_status (status)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
+    // Upgrade enum to include "occupied" when possible
+    try {
+        $db->exec("ALTER TABLE room_requests MODIFY COLUMN status ENUM('pending','approved','rejected','occupied','cancelled') NOT NULL DEFAULT 'pending'");
+    } catch (Throwable $e) {
+        // ignore
+    }
 
     // Best-effort FKs (optional for upgrades)
     try { $db->exec("ALTER TABLE rooms
@@ -201,6 +234,17 @@ function ensureUserAdminColumns(): void {
     }
     if (!$has('owner_verified_at')) {
         $db->exec("ALTER TABLE users ADD COLUMN owner_verified_at TIMESTAMP NULL DEFAULT NULL");
+    }
+
+    // Owner verification (ID upload + status)
+    if (!$has('owner_verification_status')) {
+        $db->exec("ALTER TABLE users ADD COLUMN owner_verification_status ENUM('pending','verified','rejected') NULL DEFAULT NULL");
+    }
+    if (!$has('owner_id_doc_path')) {
+        $db->exec("ALTER TABLE users ADD COLUMN owner_id_doc_path VARCHAR(255) NULL");
+    }
+    if (!$has('owner_verification_reason')) {
+        $db->exec("ALTER TABLE users ADD COLUMN owner_verification_reason TEXT NULL");
     }
 }
 
@@ -255,6 +299,52 @@ function ensureBoardingHouseModerationColumns(): void {
         $db->exec("ALTER TABLE boarding_houses ADD COLUMN views INT UNSIGNED NOT NULL DEFAULT 0");
     }
 }
+
+function ensureBoardingHouseSubscriptionColumns(): void {
+    $db = getDB();
+    $cols = $db->prepare("SELECT COLUMN_NAME
+      FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME = 'boarding_houses'");
+    $cols->execute();
+    $names = $cols->fetchAll(PDO::FETCH_COLUMN) ?: [];
+    $has = fn(string $c): bool => in_array($c, $names, true);
+
+    if (!$has('is_active')) {
+        $db->exec("ALTER TABLE boarding_houses ADD COLUMN is_active TINYINT(1) NOT NULL DEFAULT 1");
+    }
+    if (!$has('expires_at')) {
+        $db->exec("ALTER TABLE boarding_houses ADD COLUMN expires_at DATETIME NULL");
+    }
+    if (!$has('subscription_id')) {
+        $db->exec("ALTER TABLE boarding_houses ADD COLUMN subscription_id INT UNSIGNED NULL");
+    }
+    if (!$has('is_featured')) {
+        $db->exec("ALTER TABLE boarding_houses ADD COLUMN is_featured TINYINT(1) NOT NULL DEFAULT 0");
+    }
+    if (!$has('featured_until')) {
+        $db->exec("ALTER TABLE boarding_houses ADD COLUMN featured_until DATETIME NULL");
+    }
+}
+
+function ensureOwnerSubscriptionTable(): void {
+    $db = getDB();
+
+    $db->exec("CREATE TABLE IF NOT EXISTS owner_subscriptions (
+      id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+      owner_id INT UNSIGNED NOT NULL,
+      plan ENUM('basic','pro') NOT NULL DEFAULT 'basic',
+      status ENUM('pending','active','expired','rejected') NOT NULL DEFAULT 'pending',
+      start_date DATE NULL,
+      end_date DATE NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_os_owner (owner_id),
+      KEY idx_os_status (status),
+      KEY idx_os_end (end_date)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+}
 function ensureContactReplyColumns(): void {
     $db = getDB();
     $cols = $db->prepare("SELECT COLUMN_NAME
@@ -273,6 +363,181 @@ function ensureContactReplyColumns(): void {
     }
 }
 
+function ensureMonetizationTables(): void {
+    $db = getDB();
+
+    ensureOwnerSubscriptionTable();
+
+    // Payments: proof upload / PayPal Sandbox
+    $db->exec("CREATE TABLE IF NOT EXISTS payments (
+      id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+      user_id INT UNSIGNED NOT NULL,
+      room_id INT UNSIGNED NULL,
+      subscription_id INT UNSIGNED NULL,
+      kind ENUM('room_subscription','owner_subscription') NOT NULL DEFAULT 'owner_subscription',
+      plan ENUM('basic','pro') NULL,
+      plan_type ENUM('basic','pro') NULL,
+      original_price DECIMAL(10,2) NULL,
+      paid_price DECIMAL(10,2) NULL,
+      is_intro TINYINT(1) NOT NULL DEFAULT 0,
+      amount DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+      method ENUM('proof_upload','simulated','paypal') NOT NULL DEFAULT 'proof_upload',
+      proof_path VARCHAR(255) NULL,
+      paypal_order_id VARCHAR(64) NULL,
+      paypal_capture_id VARCHAR(64) NULL,
+      status ENUM('pending','approved','rejected') NOT NULL DEFAULT 'pending',
+      admin_note TEXT NULL,
+      reviewed_by INT UNSIGNED NULL,
+      reviewed_at TIMESTAMP NULL DEFAULT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_pay_user (user_id),
+      KEY idx_pay_room (room_id),
+      KEY idx_pay_sub (subscription_id),
+      KEY idx_pay_kind (kind),
+      KEY idx_pay_plan_type (plan_type),
+      KEY idx_pay_intro (is_intro),
+      KEY idx_pay_status (status),
+      KEY idx_pay_created (created_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
+    // Best-effort upgrades for PayPal columns / method enum
+    try {
+        $cols = $db->query("SHOW COLUMNS FROM payments")->fetchAll() ?: [];
+        $names = array_map(fn($r) => (string)($r["Field"] ?? ""), $cols);
+        $has = fn(string $c): bool => in_array($c, $names, true);
+
+        if (!$has("subscription_id")) {
+            $db->exec("ALTER TABLE payments ADD COLUMN subscription_id INT UNSIGNED NULL");
+        }
+        if (!$has("kind")) {
+            $db->exec("ALTER TABLE payments ADD COLUMN kind ENUM('room_subscription','owner_subscription') NOT NULL DEFAULT 'owner_subscription'");
+        }
+        if (!$has("plan")) {
+            $db->exec("ALTER TABLE payments ADD COLUMN plan ENUM('basic','pro') NULL");
+        }
+        if (!$has("plan_type")) {
+            $db->exec("ALTER TABLE payments ADD COLUMN plan_type ENUM('basic','pro') NULL");
+        }
+        if (!$has("original_price")) {
+            $db->exec("ALTER TABLE payments ADD COLUMN original_price DECIMAL(10,2) NULL");
+        }
+        if (!$has("paid_price")) {
+            $db->exec("ALTER TABLE payments ADD COLUMN paid_price DECIMAL(10,2) NULL");
+        }
+        if (!$has("is_intro")) {
+            $db->exec("ALTER TABLE payments ADD COLUMN is_intro TINYINT(1) NOT NULL DEFAULT 0");
+        }
+        if (!$has("paypal_order_id")) {
+            $db->exec("ALTER TABLE payments ADD COLUMN paypal_order_id VARCHAR(64) NULL");
+        }
+        if (!$has("paypal_capture_id")) {
+            $db->exec("ALTER TABLE payments ADD COLUMN paypal_capture_id VARCHAR(64) NULL");
+        }
+    } catch (Throwable $e) {
+        // ignore
+    }
+
+    try {
+        $db->exec("ALTER TABLE payments MODIFY COLUMN room_id INT UNSIGNED NULL");
+    } catch (Throwable $e) {
+        // ignore
+    }
+
+    try {
+        $db->exec("ALTER TABLE payments MODIFY COLUMN method ENUM('proof_upload','simulated','paypal') NOT NULL DEFAULT 'proof_upload'");
+    } catch (Throwable $e) {
+        // ignore
+    }
+
+
+    // Notifications
+    $db->exec("CREATE TABLE IF NOT EXISTS notifications (
+      id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+      user_id INT UNSIGNED NOT NULL,
+      type VARCHAR(80) NOT NULL,
+      title VARCHAR(200) NOT NULL,
+      body TEXT NULL,
+      link_url VARCHAR(255) NULL,
+      is_read TINYINT(1) NOT NULL DEFAULT 0,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_notif_user (user_id, is_read),
+      KEY idx_notif_created (created_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
+    // Admin warnings (anti-scam)
+    $db->exec("CREATE TABLE IF NOT EXISTS admin_warnings (
+      id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+      owner_id INT UNSIGNED NOT NULL,
+      message TEXT NOT NULL,
+      is_active TINYINT(1) NOT NULL DEFAULT 1,
+      created_by INT UNSIGNED NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_warn_owner (owner_id, is_active),
+      KEY idx_warn_created (created_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+}
+
+
+function ensureAmenityUniqueness(): void {
+    $db = getDB();
+
+    try {
+        $db->query('SELECT 1 FROM amenities LIMIT 1');
+    } catch (Throwable $e) {
+        return;
+    }
+
+    // Normalize names.
+    try {
+        $db->exec('UPDATE amenities SET name = TRIM(name)');
+    } catch (Throwable $e) {
+        // ignore
+    }
+
+    // Deduplicate by name, keep smallest id.
+    try {
+        $dups = $db->query("SELECT name, MIN(id) AS keep_id, GROUP_CONCAT(id ORDER BY id) AS all_ids, COUNT(*) AS cnt
+          FROM amenities
+          GROUP BY name
+          HAVING cnt > 1")
+          ->fetchAll() ?: [];
+
+        $hasBha = true;
+        try { $db->query('SELECT 1 FROM boarding_house_amenities LIMIT 1'); } catch (Throwable $e) { $hasBha = false; }
+
+        foreach ($dups as $d) {
+            $keepId = intval($d['keep_id'] ?? 0);
+            $idsRaw = (string)($d['all_ids'] ?? '');
+            if ($keepId <= 0 || $idsRaw === '') continue;
+
+            $ids = array_values(array_filter(array_map('intval', explode(',', $idsRaw)), fn($v) => $v > 0 && $v !== $keepId));
+            if (empty($ids)) continue;
+
+            if ($hasBha) {
+                $upd = $db->prepare('UPDATE IGNORE boarding_house_amenities SET amenity_id = ? WHERE amenity_id = ?');
+                foreach ($ids as $id) $upd->execute([$keepId, $id]);
+            }
+
+            $del = $db->prepare('DELETE FROM amenities WHERE id = ?');
+            foreach ($ids as $id) $del->execute([$id]);
+        }
+    } catch (Throwable $e) {
+        // ignore
+    }
+
+    // Ensure unique index exists.
+    try {
+        $hasIndex = $db->query("SHOW INDEX FROM amenities WHERE Key_name = 'uq_amenities_name'")->fetch();
+        if (!$hasIndex) {
+            $db->exec('ALTER TABLE amenities ADD UNIQUE KEY uq_amenities_name (name)');
+        }
+    } catch (Throwable $e) {
+        // ignore
+    }
+}
 function seedDemoData(): void {
     $db = getDB();
 
@@ -290,16 +555,13 @@ function seedDemoData(): void {
 
     // Auto-verify demo owner (if columns exist)
     try {
-        $db->exec("UPDATE users SET owner_verified = 1, owner_verified_at = NOW() WHERE email = 'owner@demo.com'");
+        $db->exec("UPDATE users SET owner_verification_status = 'verified', owner_verified = 1, owner_verified_at = NOW() WHERE email = 'owner@demo.com'");
     } catch (Throwable $e) {
-        // ignore on older schemas
-    }
-
-    // Avoid breaking existing owner accounts on upgrade (best-effort)
-    try {
-        $db->exec("UPDATE users SET owner_verified = 1, owner_verified_at = COALESCE(owner_verified_at, NOW()) WHERE role = 'owner' AND owner_verified = 0");
-    } catch (Throwable $e) {
-        // ignore on older schemas
+        try {
+            $db->exec("UPDATE users SET owner_verified = 1, owner_verified_at = NOW() WHERE email = 'owner@demo.com'");
+        } catch (Throwable $e2) {
+            // ignore on older schemas
+        }
     }
 
     // Amenities (safe to run multiple times)
@@ -321,9 +583,12 @@ try {
     ensureUserAdminColumns();
     ensureUserRoleSupportsAdmin();
     ensureBoardingHouseModerationColumns();
+    ensureBoardingHouseSubscriptionColumns();
     ensureContactReplyColumns();
     ensureChatTables();
     ensureRoomTables();
+    ensureMonetizationTables();
+    ensureAmenityUniqueness();
     seedDemoData();
     $ok = true;
 } catch (Throwable $e) {
@@ -361,6 +626,11 @@ try {
   </div>
 </body>
 </html>
+
+
+
+
+
 
 
 

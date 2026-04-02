@@ -1,4 +1,4 @@
-﻿<?php
+<?php
 require_once __DIR__ . '/../includes/config.php';
 
 $id = intval($_GET['id'] ?? 0);
@@ -6,12 +6,29 @@ if (!$id) {
     header('Location: ' . SITE_URL . '/index.php');
     exit;
 }
-
 $db = getDB();
+$serviceFeePct = getServiceFeePercentage();
+$userCols = [];
+try {
+    $userCols = $db->query("SHOW COLUMNS FROM users")->fetchAll() ?: [];
+} catch (Throwable $e) {
+    $userCols = [];
+}
+$userFields = array_map(fn($r) => (string)($r['Field'] ?? ''), $userCols);
+$hasOwnerVerified = in_array('owner_verified', $userFields, true);
+$hasOwnerVStatus = in_array('owner_verification_status', $userFields, true);
+$ownerSelectExtra = '';
+if ($hasOwnerVerified) $ownerSelectExtra .= ', u.owner_verified';
+if ($hasOwnerVStatus) $ownerSelectExtra .= ', u.owner_verification_status';
 
 $bhCols = $db->query("SHOW COLUMNS FROM boarding_houses")->fetchAll() ?: [];
 $bhFields = array_map(fn($r) => (string)($r['Field'] ?? ''), $bhCols);
 $hasApprovalStatus = in_array('approval_status', $bhFields, true);
+$hasIsActive = in_array('is_active', $bhFields, true);
+$hasExpiresAt = in_array('expires_at', $bhFields, true);
+$activeWhere = '';
+if ($hasIsActive) $activeWhere .= " AND bh.is_active = 1";
+if ($hasExpiresAt) $activeWhere .= " AND (bh.expires_at IS NULL OR bh.expires_at >= NOW())";
 $approvalWhere = "";
 if ($hasApprovalStatus) {
     if (isAdmin()) {
@@ -30,10 +47,11 @@ $stmt = $db->prepare("
         u.full_name AS owner_name,
         u.phone AS owner_phone,
         u.email AS owner_email,
-        u.created_at AS owner_since
+        u.created_at AS owner_since,\r\n        (SELECT plan FROM owner_subscriptions os WHERE os.owner_id = bh.owner_id AND os.status = 'active' AND (os.end_date IS NULL OR os.end_date >= CURDATE()) ORDER BY COALESCE(os.end_date, '9999-12-31') DESC, os.id DESC LIMIT 1) AS owner_plan_type
+        $ownerSelectExtra
     FROM boarding_houses bh
     JOIN users u ON u.id = bh.owner_id
-    WHERE bh.id = ? AND bh.status != 'inactive'$approvalWhere
+    WHERE bh.id = ? AND bh.status != 'inactive'$activeWhere$approvalWhere
 ");
 $stmt->execute([$id]);
 $bh = $stmt->fetch();
@@ -49,11 +67,47 @@ if ($hasViews) {
     try {
         $db->prepare("UPDATE boarding_houses SET views = views + 1 WHERE id = ?")->execute([$id]);
         if (isset($bh['views'])) $bh['views'] = intval($bh['views']) + 1;
+
+        // Track daily views for lightweight notifications
+        ensureBoardingHouseDailyViewsTable();
+        try {
+            $db->prepare("INSERT INTO boarding_house_daily_views (boarding_house_id, view_date, views)
+              VALUES (?, CURDATE(), 1)
+              ON DUPLICATE KEY UPDATE views = views + 1")
+              ->execute([$id]);
+
+            $todayViews = 0;
+            try {
+                $q = $db->prepare('SELECT views FROM boarding_house_daily_views WHERE boarding_house_id = ? AND view_date = CURDATE() LIMIT 1');
+                $q->execute([$id]);
+                $todayViews = intval($q->fetchColumn() ?: 0);
+            } catch (Throwable $e) {
+                $todayViews = 0;
+            }
+
+            if ($todayViews === 10 && notificationsEnabled()) {
+                $ownerId = intval($bh['owner_id'] ?? 0);
+                if ($ownerId > 0) {
+                    $type = 'listing_views_10_today';
+                    $link = SITE_URL . '/pages/owner/dashboard.php';
+
+                    $chk = $db->prepare('SELECT COUNT(*) FROM notifications WHERE user_id = ? AND type = ? AND link_url = ? AND created_at >= CURDATE()');
+                    $chk->execute([$ownerId, $type, $link]);
+                    if (intval($chk->fetchColumn() ?: 0) === 0) {
+                        $name = trim((string)($bh['name'] ?? ''));
+                        $title = 'Your listing got 10 views today';
+                        $body = $name !== '' ? ('"' . $name . '" reached 10 views today.') : 'One of your listings reached 10 views today.';
+                        createNotification($ownerId, $type, $title, $body, $link);
+                    }
+                }
+            }
+        } catch (Throwable $e) {
+            // ignore
+        }
     } catch (Throwable $e) {
         // ignore
     }
 }
-
 $currentUser = isLoggedIn() ? getCurrentUser() : null;
 $isFavorite = false;
 if (isLoggedIn()) {
@@ -79,26 +133,37 @@ try {
 $roomFields = array_map(fn($r) => (string)($r['Field'] ?? ''), $roomCols);
 $hasRoomAmenities = in_array('amenities', $roomFields, true);
 $hasRoomAccommodationType = in_array('accommodation_type', $roomFields, true);
+$hasRoomSubscription = in_array('subscription_status', $roomFields, true);
+$hasRoomSubEnd = in_array('end_date', $roomFields, true);
+$enforceRoomSub = function_exists('roomSubscriptionEnforced') ? roomSubscriptionEnforced() : false;
+$roomsEmptyNote = 'The owner has not added room details for this property yet.';
 
 $rooms = [];
 $roomRequestsByRoom = [];
 try {
-    $roomSql = "SELECT id, room_name, price, capacity, current_occupants, status" . ($hasRoomAccommodationType ? ", accommodation_type" : "") . ($hasRoomAmenities ? ", amenities" : "") . (in_array('room_image', $roomFields, true) ? ", room_image" : "") . "
+    $roomSql = "SELECT id, room_name, price, capacity, current_occupants, status"
+        . ($hasRoomAccommodationType ? ", accommodation_type" : "")
+        . ($hasRoomAmenities ? ", amenities" : "")
+        . (in_array('room_image', $roomFields, true) ? ", room_image" : "")
+        . ($hasRoomSubscription ? ", subscription_status" : "")
+        . ($hasRoomSubEnd ? ", end_date" : "")
+        . "
       FROM rooms
-      WHERE boarding_house_id = ?
-      ORDER BY price ASC, id ASC";
+      WHERE boarding_house_id = ? ORDER BY price ASC, id ASC";
     $roomsStmt = $db->prepare($roomSql);
     $roomsStmt->execute([$id]);
     $rooms = $roomsStmt->fetchAll() ?: [];
 
     if (isLoggedIn() && isTenant()) {
-        $reqStmt = $db->prepare("SELECT room_id, status
-          FROM room_requests
-          WHERE tenant_id = ?
-            AND room_id IN (SELECT id FROM rooms WHERE boarding_house_id = ?)");
+        $reqStmt = $db->prepare("SELECT room_id, status\r\n          FROM room_requests\r\n          WHERE tenant_id = ?\r\n            AND room_id IN (SELECT id FROM rooms WHERE boarding_house_id = ?)\r\n          ORDER BY created_at DESC");
         $reqStmt->execute([intval($_SESSION['user_id']), $id]);
+        $seenRoomReq = [];
         foreach (($reqStmt->fetchAll() ?: []) as $reqRow) {
-            $roomRequestsByRoom[intval($reqRow['room_id'] ?? 0)] = (string)($reqRow['status'] ?? '');
+            $rid = intval($reqRow['room_id'] ?? 0);
+            if ($rid <= 0) continue;
+            if (isset($seenRoomReq[$rid])) continue;
+            $seenRoomReq[$rid] = true;
+            $roomRequestsByRoom[$rid] = (string)($reqRow['status'] ?? '');
         }
     }
 } catch (Throwable $e) {
@@ -106,6 +171,27 @@ try {
     $roomRequestsByRoom = [];
 }
 
+
+$computedPriceMin = (float)($bh['price_min'] ?? 0);
+$computedPriceMax = $bh['price_max'] ?? null;
+
+// Prefer deriving the display price range from room prices (all rooms), then fallback to boarding_houses.price_min/max.
+try {
+    $pStmt = $db->prepare("SELECT MIN(price) AS min_price, MAX(price) AS max_price
+      FROM rooms
+      WHERE boarding_house_id = ?
+        AND price IS NOT NULL
+        AND price > 0");
+    $pStmt->execute([$id]);
+    $pRow = $pStmt->fetch() ?: [];
+    if (($pRow['min_price'] ?? null) !== null) {
+        $computedPriceMin = (float)$pRow['min_price'];
+        $computedPriceMax = ($pRow['max_price'] ?? null) !== null ? (float)$pRow['max_price'] : null;
+        if ($computedPriceMax !== null && $computedPriceMax <= $computedPriceMin) $computedPriceMax = null;
+    }
+} catch (Throwable $e) {
+    // ignore
+}
 $amenitiesStmt = $db->prepare("SELECT a.* FROM amenities a JOIN boarding_house_amenities bha ON bha.amenity_id = a.id WHERE bha.boarding_house_id = ?");
 $amenitiesStmt->execute([$id]);
 $amenities = $amenitiesStmt->fetchAll() ?: [];
@@ -116,15 +202,16 @@ $bhName = (string)($bh['name'] ?? 'Listing');
 $bhLocation = trim((string)($bh['location'] ?? ($bh['address'] ?? '')));
 $bhCity = trim((string)($bh['city'] ?? ''));
 $bhFullLocation = trim($bhLocation . (($bhLocation !== '' && $bhCity !== '') ? ', ' : '') . $bhCity);
-$bhStatus = (string)($bh['status'] ?? 'active');
+$bhStatusUi = boardingHouseStatusUi((string)($bh['status'] ?? 'active'));
 $bhAvailableRooms = intval($bh['available_rooms'] ?? 0);
 $bhTotalRooms = intval($bh['total_rooms'] ?? 0);
-$bhPriceMin = (float)($bh['price_min'] ?? 0);
-$bhPriceMax = $bh['price_max'] ?? null;
+$bhPriceMin = $computedPriceMin;
+$bhPriceMax = $computedPriceMax;
 $bhContactPhone = trim((string)($bh['contact_phone'] ?? ($bh['owner_phone'] ?? '')));
 $bhContactEmail = trim((string)($bh['contact_email'] ?? ($bh['owner_email'] ?? '')));
 $ownerName = (string)($bh['owner_name'] ?? 'Property Owner');
 $ownerSince = (string)($bh['owner_since'] ?? '');
+$ownerVerified = ((string)($bh['owner_verification_status'] ?? '') === 'verified') || (intval($bh['owner_verified'] ?? 0) === 1);
 $bhMapQuery = $bhFullLocation !== '' ? rawurlencode($bhFullLocation) : '';
 $bhMapEmbedUrl = $bhMapQuery !== '' ? ("https://www.google.com/maps?q={$bhMapQuery}&output=embed") : '';
 $bhMapLinkUrl = $bhMapQuery !== '' ? ("https://www.google.com/maps?q={$bhMapQuery}") : '';
@@ -150,22 +237,98 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['report_submit'])) {
     }
 }
 
+// Ratings / Reviews (best-effort, supports older installs without the table yet)
+$hasReviews = false;
+$reviewSummary = ['avg' => null, 'count' => 0];
+$reviews = [];
+$reviewErrors = [];
+$myReview = [];
+$canReview = false;
+
+if (isLoggedIn() && isTenant()) {
+    try {
+        $canStmt = $db->prepare("
+            SELECT 1
+            FROM room_requests rr
+            JOIN rooms r ON r.id = rr.room_id
+            WHERE rr.tenant_id = ?
+              AND r.boarding_house_id = ?
+              AND rr.status IN ('approved','occupied')
+            LIMIT 1
+        ");
+        $canStmt->execute([intval($_SESSION['user_id']), $id]);
+        $canReview = (bool)$canStmt->fetchColumn();
+    } catch (Throwable $e) {
+        $canReview = false;
+    }
+}
+
+try {
+    $sumStmt = $db->prepare("
+        SELECT AVG(rating) AS avg_rating, COUNT(*) AS review_count
+        FROM reviews
+        WHERE boarding_house_id = ? AND is_hidden = 0
+    ");
+    $sumStmt->execute([$id]);
+    $sumRow = $sumStmt->fetch() ?: [];
+
+    $hasReviews = true;
+    $reviewSummary['avg'] = ($sumRow['avg_rating'] ?? null) !== null ? (float)$sumRow['avg_rating'] : null;
+    $reviewSummary['count'] = intval($sumRow['review_count'] ?? 0);
+
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['review_submit'])) {
+        if (!isLoggedIn() || !isTenant()) {
+            $reviewErrors['general'] = 'Please log in as a tenant to leave a review.';
+        } elseif (!$canReview) {
+            $reviewErrors['general'] = 'You can review after you have an approved stay for this property.';
+        } else {
+            $rating = intval($_POST['rating'] ?? 0);
+            $reviewText = trim((string)($_POST['review'] ?? ''));
+            $reviewLen = function_exists('mb_strlen') ? mb_strlen($reviewText) : strlen($reviewText);
+
+            if ($rating < 1 || $rating > 5) $reviewErrors['rating'] = 'Please select a rating from 1 to 5.';
+            if ($reviewLen > 2000) $reviewErrors['review'] = 'Review must be 2000 characters or less.';
+
+            if (empty($reviewErrors)) {
+                $uid = intval($_SESSION['user_id']);
+                $saveStmt = $db->prepare("
+                    INSERT INTO reviews (boarding_house_id, user_id, rating, review)
+                    VALUES (?,?,?,?)
+                    ON DUPLICATE KEY UPDATE rating = VALUES(rating), review = VALUES(review)
+                ");
+                $saveStmt->execute([$id, $uid, $rating, ($reviewText !== '' ? $reviewText : null)]);
+                setFlash('success', 'Review saved.');
+                header('Location: ' . SITE_URL . '/pages/detail.php?id=' . $id . '#reviews');
+                exit;
+            }
+        }
+    }
+
+    $listStmt = $db->prepare("
+        SELECT r.rating, r.review, r.created_at, u.full_name
+        FROM reviews r
+        JOIN users u ON u.id = r.user_id
+        WHERE r.boarding_house_id = ? AND r.is_hidden = 0
+        ORDER BY r.created_at DESC
+        LIMIT 50
+    ");
+    $listStmt->execute([$id]);
+    $reviews = $listStmt->fetchAll() ?: [];
+
+    if (isLoggedIn() && isTenant()) {
+        $mineStmt = $db->prepare("SELECT rating, review FROM reviews WHERE boarding_house_id = ? AND user_id = ? LIMIT 1");
+        $mineStmt->execute([$id, intval($_SESSION['user_id'])]);
+        $myReview = $mineStmt->fetch() ?: [];
+    }
+} catch (Throwable $e) {
+    $hasReviews = false;
+    $reviewSummary = ['avg' => null, 'count' => 0];
+    $reviews = [];
+    $myReview = [];
+}
 $pageTitle = sanitize($bhName);
 require_once __DIR__ . '/../includes/header.php';
 ?>
-
-<div class="page-header">
-  <div class="container">
-    <nav class="page-breadcrumb">
-      <a href="<?= SITE_URL ?>/index.php">Home</a>
-      <i class="fas fa-chevron-right" style="font-size:.7rem"></i>
-      <a href="<?= SITE_URL ?>/index.php">Listings</a>
-      <i class="fas fa-chevron-right" style="font-size:.7rem"></i>
-      <span><?= sanitize($bhName) ?></span>
-    </nav>
-  </div>
-</div>
-
 <div class="container">
   <div class="detail-grid">
 
@@ -210,8 +373,8 @@ require_once __DIR__ . '/../includes/header.php';
 
       <div class="flex gap-3 mb-4" style="flex-wrap:wrap">
         <div class="amenity-chip"><i class="fas fa-door-open"></i> <?= $bhAvailableRooms ?> / <?= $bhTotalRooms ?> rooms available</div>
-        <span class="property-status status-<?= sanitize($bhStatus) ?>" style="position:static;padding:6px 14px;border-radius:50px">
-          <?= $bhStatus === 'full' ? 'Full' : ($bhStatus === 'active' ? '&bull; Available' : 'Inactive') ?>
+        <span class="property-status status-<?= sanitize($bhStatusUi) ?>" style="position:static;padding:6px 14px;border-radius:50px">
+          <?= $bhStatusUi === 'full' ? 'Full' : ($bhStatusUi === 'active' ? '&bull; Available' : 'Inactive') ?>
         </span>
       </div>
 
@@ -264,7 +427,7 @@ require_once __DIR__ . '/../includes/header.php';
           <div class="empty-state compact" style="background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);">
             <i class="fas fa-bed"></i>
             <h3>No rooms listed yet</h3>
-            <p>The owner has not added room details for this property yet.</p>
+            <p><?= sanitize($roomsEmptyNote) ?></p>
           </div>
         <?php else: ?>
           <div class="room-grid">
@@ -274,6 +437,14 @@ require_once __DIR__ . '/../includes/header.php';
               $currentOccupants = max(0, intval($room['current_occupants'] ?? 0));
               if ($currentOccupants > $capacity) $currentOccupants = $capacity;
               $roomStatus = ($room['status'] ?? '') === 'occupied' || $currentOccupants >= $capacity ? 'occupied' : 'available';
+              $roomSubOk = true;
+              if ($enforceRoomSub && $hasRoomSubscription) {
+                  $subStatus = (string)($room['subscription_status'] ?? '');
+                  $endDate = (string)($room['end_date'] ?? '');
+                  $roomSubOk = ($subStatus === 'active');
+                  if ($roomSubOk && $endDate !== '') $roomSubOk = (strtotime($endDate) >= strtotime(date('Y-m-d')));
+                  if (!$roomSubOk && $roomStatus === 'available') $roomStatus = 'inactive';
+              }
               $requestStatus = $roomRequestsByRoom[$roomId] ?? '';
               $roomTypeValue = trim((string)($room['accommodation_type'] ?? ''));
               $roomAmenities = [];
@@ -300,15 +471,23 @@ require_once __DIR__ . '/../includes/header.php';
                       <span><i class="fas fa-users"></i> <?= $currentOccupants ?>/<?= $capacity ?> occupied</span>
                     </div>
                   </div>
-                  <span class="badge <?= $roomStatus === 'occupied' ? 'status-full' : 'status-active' ?>">
-                    <?= $roomStatus === 'occupied' ? 'Occupied' : 'Available' ?>
+                  <span class="badge <?= $roomStatus === 'occupied' ? 'status-full' : ($roomStatus === 'inactive' ? 'status-inactive' : 'status-active') ?>">
+                    <?= $roomStatus === 'occupied' ? 'Occupied' : ($roomStatus === 'inactive' ? 'Inactive' : 'Available') ?>
                   </span>
                 </div>
 
                 <div class="room-card-price">
-                  <?= formatPrice((float)($room['price'] ?? 0)) ?>
-                  <small>/month</small>
-                </div>
+  <?php
+    $basePrice = (float)($room['price'] ?? 0);
+    $feeAmount = round($basePrice * ($serviceFeePct / 100), 2);
+    $totalPrice = $basePrice + $feeAmount;
+  ?>
+  <?= formatPrice($totalPrice) ?>
+  <small>/month</small>
+  <div class="text-muted text-xs" style="margin-top:6px">
+    Room: <?= formatPrice($basePrice) ?> &middot; Service fee (<?= sanitize((string)$serviceFeePct) ?>%): <?= formatPrice($feeAmount) ?>
+  </div>
+</div>
 
                 <div class="room-card-amenities">
                   <?php if (!empty($roomAmenities)): ?>
@@ -325,10 +504,10 @@ require_once __DIR__ . '/../includes/header.php';
                 </div>
 
                 <div class="room-card-actions">
-                  <?php if ($roomStatus === 'available' && isLoggedIn() && isTenant() && intval($bh['owner_id'] ?? 0) !== intval($_SESSION['user_id'] ?? 0)): ?>
+                  <?php if ($roomStatus === 'available' && $roomSubOk && isLoggedIn() && isTenant() && intval($bh['owner_id'] ?? 0) !== intval($_SESSION['user_id'] ?? 0)): ?>
                     <?php if ($requestStatus === 'pending'): ?>
                       <button class="btn btn-ghost btn-sm" type="button" disabled><i class="fas fa-hourglass-half"></i> Request Pending</button>
-                    <?php elseif ($requestStatus === 'approved'): ?>
+                    <?php elseif (in_array($requestStatus, ['approved','occupied'], true)): ?>
                       <button class="btn btn-ghost btn-sm" type="button" disabled><i class="fas fa-circle-check"></i> Assigned to You</button>
                     <?php else: ?>
                       <form method="POST" action="<?= SITE_URL ?>/pages/room_request.php">
@@ -337,7 +516,9 @@ require_once __DIR__ . '/../includes/header.php';
                         <button class="btn btn-primary btn-sm" type="submit"><i class="fas fa-paper-plane"></i> Inquire / Reserve</button>
                       </form>
                     <?php endif; ?>
-                  <?php elseif ($roomStatus === 'available' && !isLoggedIn()): ?>
+                  <?php elseif ($roomStatus === 'available' && !$roomSubOk): ?>
+  <button class="btn btn-ghost btn-sm" type="button" disabled><i class="fas fa-ban"></i> Subscription Inactive</button>
+<?php elseif ($roomStatus === 'available' && !isLoggedIn()): ?>
                     <a class="btn btn-primary btn-sm" href="<?= SITE_URL ?>/login.php?redirect=<?= urlencode('/pages/detail.php?id=' . $id . '#rooms') ?>">
                       <i class="fas fa-lock"></i> Login to Inquire
                     </a>
@@ -381,7 +562,7 @@ require_once __DIR__ . '/../includes/header.php';
         <div class="contact-owner">
           <div class="contact-owner-avatar"><?= strtoupper(substr(sanitize($ownerName), 0, 1)) ?></div>
           <div class="contact-owner-info">
-            <strong><?= sanitize($ownerName) ?></strong>
+            <strong><?= sanitize($ownerName) ?><?php if ($ownerVerified): ?> <span class="badge status-active" style="margin-left:6px"><i class="fas fa-circle-check"></i> Verified</span><?php endif; ?><?php if ($isPremiumOwner): ?> <span class="badge" style="margin-left:6px;background:rgba(var(--primary-rgb),0.12);color:var(--primary);border:1px solid rgba(var(--primary-rgb),0.25)"><i class="fas fa-crown"></i> Premium Owner</span><?php endif; ?></strong>
             <span>Property Owner &middot; Member since <?= $ownerSince ? date('Y', strtotime($ownerSince)) : '' ?></span>
           </div>
         </div>
@@ -465,5 +646,13 @@ require_once __DIR__ . '/../includes/header.php';
 </div>
 
 <?php require_once __DIR__ . '/../includes/footer.php'; ?>
+
+
+
+
+
+
+
+
 
 

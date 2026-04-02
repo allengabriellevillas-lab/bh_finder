@@ -1,4 +1,4 @@
-﻿<?php
+<?php
 require_once __DIR__ . '/includes/config.php';
 if (isLoggedIn()) { header('Location: ' . SITE_URL . '/index.php'); exit; }
 $pageTitle = 'Create Account';
@@ -29,18 +29,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $stmt = $db->prepare("INSERT INTO users (full_name,email,password,role,phone) VALUES(?,?,?,?,?)");
             $stmt->execute([$formData['full_name'],$formData['email'],$hash,$formData['role'],$formData['phone']]);
             $newUserId = intval($db->lastInsertId());
-            if ($formData['role'] === 'owner') {
-                try {
-                    $db->prepare("UPDATE users SET owner_verified = 1, owner_verified_at = COALESCE(owner_verified_at, NOW()) WHERE id = ?")
-                       ->execute([$newUserId]);
-                } catch (Throwable $e) {
-                    // Older schemas may not have owner verification columns.
-                }
-            }
             $_SESSION['user_id']   = $newUserId;
             $_SESSION['user_role'] = $formData['role'];
             setFlash('success', 'Welcome to ' . SITE_NAME . '!');
-            header('Location: ' . ($formData['role']==='owner' ? SITE_URL.'/pages/owner/dashboard.php' : SITE_URL.'/index.php'));
+            $dest = ($formData['role'] === 'owner') ? (SITE_URL . '/pages/owner/verification.php') : (SITE_URL . '/index.php');
+            header('Location: ' . $dest);
             exit;
         }
     }

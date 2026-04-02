@@ -1,4 +1,4 @@
-﻿<?php
+<?php
 require_once __DIR__ . '/../includes/config.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
@@ -48,9 +48,24 @@ function normalizeInternalRedirect(string $redirect): string {
     return $redirect;
 }
 
+function wantsJson(): bool {
+    $accept = strtolower((string)($_SERVER['HTTP_ACCEPT'] ?? ''));
+    if (str_contains($accept, 'application/json')) return true;
+    $xrw = strtolower((string)($_SERVER['HTTP_X_REQUESTED_WITH'] ?? ''));
+    return $xrw === 'xmlhttprequest';
+}
+
+function jsonOut(array $payload, int $status = 200): void {
+    http_response_code($status);
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode($payload);
+    exit;
+}
+
 $redirect = normalizeInternalRedirect($redirect);
 
 if ($roomId <= 0) {
+    if (wantsJson()) jsonOut(['ok' => false, 'message' => 'Invalid room.'], 400);
     setFlash('error', 'Invalid room.');
     header('Location: ' . SITE_URL . '/index.php');
     exit;
@@ -65,21 +80,44 @@ try {
     $room = $stmt->fetch();
     if (!$room) throw new RuntimeException('Room not found.');
 
+    // Subscription enforcement (best-effort)
+    try {
+        if (function_exists('roomSubscriptionEnforced') && roomSubscriptionEnforced()) {
+            $sub = strtolower((string)($room['subscription_status'] ?? ''));
+            $end = trim((string)($room['end_date'] ?? ''));
+            $active = ($sub === 'active') && ($end === '' || strtotime($end) >= strtotime(date('Y-m-d')));
+            if (!$active) throw new RuntimeException('This room is not available right now.');
+        }
+    } catch (Throwable $e) {
+        // If columns are missing, ignore.
+    }
+
     $cap = max(1, intval($room['capacity'] ?? 1));
     $cur = max(0, intval($room['current_occupants'] ?? 0));
     if ($cur >= $cap || ($room['status'] ?? '') === 'occupied') {
         throw new RuntimeException('This room is already full.');
     }
 
-    // Avoid duplicate pending requests
-    $check = $db->prepare("SELECT id FROM room_requests WHERE room_id = ? AND tenant_id = ? AND status = 'pending' LIMIT 1");
+    // Avoid duplicate active requests
+    $check = $db->prepare("SELECT id, status FROM room_requests
+      WHERE room_id = ? AND tenant_id = ? AND status IN ('pending','approved','occupied')
+      ORDER BY created_at DESC
+      LIMIT 1");
     $check->execute([$roomId, intval($_SESSION['user_id'])]);
-    if ($check->fetch()) {
-        setFlash('success', 'You already have a pending request for this room.');
+    $existing = $check->fetch();
+
+    $status = 'pending';
+    if ($existing) {
+        $status = (string)($existing['status'] ?? 'pending');
+        $msg = 'You already have an active request for this room.';
+        if (wantsJson()) jsonOut(['ok' => true, 'status' => $status, 'message' => $msg]);
+        setFlash('success', $msg);
     } else {
         $ins = $db->prepare("INSERT INTO room_requests (room_id, tenant_id, status) VALUES (?,?, 'pending')");
         $ins->execute([$roomId, intval($_SESSION['user_id'])]);
-        setFlash('success', 'Room request sent. The owner will review it.');
+        $msg = 'Room request sent. The owner will review it.';
+        if (wantsJson()) jsonOut(['ok' => true, 'status' => 'pending', 'message' => $msg]);
+        setFlash('success', $msg);
     }
 
     $bhId = intval($room['bh_id'] ?? 0);
@@ -90,7 +128,9 @@ try {
     header('Location: ' . SITE_URL . $redirect);
     exit;
 } catch (Throwable $e) {
-    setFlash('error', $e->getMessage() ?: 'Unable to send request.');
+    $msg = $e->getMessage() ?: 'Unable to send request.';
+    if (wantsJson()) jsonOut(['ok' => false, 'message' => $msg], 400);
+    setFlash('error', $msg);
     if ($redirect === '') {
         header('Location: ' . SITE_URL . '/index.php');
     } else {

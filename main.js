@@ -2,7 +2,7 @@
 
 document.addEventListener('DOMContentLoaded', function () {
 
-    // ── Mobile Nav Toggle ──
+    // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Mobile Nav Toggle ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
     const navToggle = document.getElementById('navToggle');
     const navLinks = document.getElementById('navLinks');
     if (navToggle && navLinks) {
@@ -16,7 +16,7 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
-    // ── User Dropdown ──
+    // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ User Dropdown ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
     const userBtn = document.getElementById('userBtn');
     const userDropdown = document.getElementById('userDropdown');
     if (userBtn && userDropdown) {
@@ -27,7 +27,217 @@ document.addEventListener('DOMContentLoaded', function () {
         document.addEventListener('click', () => userDropdown.classList.remove('open'));
     }
 
-    // ── Custom Select (styled dropdown) ──
+
+    
+    // Notifications Dropdown (Owner dashboard/topbar)
+    const notifBtn = document.getElementById('notifBtn');
+    const notifDropdown = document.getElementById('notifDropdown');
+    if (notifBtn && notifDropdown) {
+        notifBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            notifDropdown.classList.toggle('open');
+            userDropdown?.classList.remove('open');
+        });
+        notifDropdown.addEventListener('click', (e) => e.stopPropagation());
+        document.addEventListener('click', (e) => {
+            if (!notifDropdown.contains(e.target) && !notifBtn.contains(e.target)) {
+                notifDropdown.classList.remove('open');
+            }
+        });
+
+        const markAllBtn = notifDropdown.querySelector('[data-notif-markall]');
+        if (markAllBtn) {
+            markAllBtn.addEventListener('click', async () => {
+                const siteUrl = document.querySelector('meta[name="site-url"]')?.getAttribute('content') || '';
+                const url = (siteUrl || '.') + '/api/notifications_mark_all.php';
+                try {
+                    const res = await fetch(url, { method: 'POST', credentials: 'same-origin' });
+                    const data = await res.json().catch(() => null);
+                    if (!data || !data.ok) throw new Error('failed');
+                    const unread = parseInt(data.unread || '0', 10) || 0;
+                    updateNotifBadges(unread);
+                    notifDropdown.querySelectorAll('.notif-item.is-new').forEach(el => el.classList.remove('is-new'));
+                    notifDropdown.querySelectorAll('.notif-newdot').forEach(el => el.remove());
+                } catch (err) {
+                    // ignore
+                }
+            });
+        }
+    }
+// --- AJAX enhancements (progressive; no full reload for common actions) ---
+    (function initAjaxEnhancements() {
+        function isJsonResponse(res) {
+            const ct = (res.headers.get('content-type') || '').toLowerCase();
+            return ct.includes('application/json');
+        }
+
+        function showToast(message, kind = 'success') {
+            if (!message) return;
+            const el = document.createElement('div');
+            el.className = `flash flash-${kind}`;
+            el.style.position = 'fixed';
+            el.style.right = '16px';
+            el.style.top = '16px';
+            el.style.zIndex = '9999';
+            el.style.maxWidth = '420px';
+            el.style.boxShadow = '0 12px 28px rgba(0,0,0,.12)';
+            el.innerHTML = `<i class="fas ${kind === 'error' ? 'fa-exclamation-circle' : 'fa-check-circle'}"></i>${String(message)}`;
+            document.body.appendChild(el);
+            setTimeout(() => el.remove(), 2600);
+        }
+
+        function updateNotifBadges(unread) {
+            const bellLinks = document.querySelectorAll('a[aria-label="Notifications"], a[title="Notifications"]');
+            bellLinks.forEach(link => {
+                const badge = link.querySelector('.dash-icon-badge');
+                if (unread > 0) {
+                    if (badge) {
+                        badge.textContent = unread > 99 ? '99+' : String(unread);
+                    } else {
+                        const b = document.createElement('span');
+                        b.className = 'dash-icon-badge';
+                        b.textContent = unread > 99 ? '99+' : String(unread);
+                        link.appendChild(b);
+                    }
+                } else {
+                    badge?.remove();
+                }
+            });
+        }
+
+        async function postFormJson(form) {
+            const action = form.getAttribute('action') || window.location.href;
+            const method = (form.getAttribute('method') || 'POST').toUpperCase();
+            const fd = new FormData(form);
+            const res = await fetch(action, {
+                method,
+                body: fd,
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'Accept': 'application/json',
+                },
+                credentials: 'same-origin',
+            });
+            if (!isJsonResponse(res)) {
+                throw new Error('Non-JSON response');
+            }
+            const data = await res.json();
+            return { res, data };
+        }
+
+        // Favorites (heart)
+        document.addEventListener('submit', async (e) => {
+            const form = e.target;
+            if (!(form instanceof HTMLFormElement)) return;
+            if (!form.classList.contains('fav-form')) return;
+            e.preventDefault();
+
+            const btn = form.querySelector('button[type="submit"]');
+            btn?.setAttribute('disabled', 'disabled');
+
+            try {
+                const { data } = await postFormJson(form);
+                if (!data?.ok) {
+                    showToast(data?.message || 'Failed to update favorites.', 'error');
+                    return;
+                }
+
+                const isFav = !!data.favorite;
+                const actionInput = form.querySelector('input[name="action"]');
+                if (actionInput) actionInput.value = isFav ? 'remove' : 'add';
+
+                const favBtn = form.querySelector('.fav-btn');
+                if (favBtn) {
+                    favBtn.classList.toggle('is-active', isFav);
+                }
+
+                // If we're on the favorites page and removed, drop the card.
+                if (!isFav && form.closest('.property-card')) {
+                    form.closest('.property-card')?.remove();
+                }
+
+                showToast(data.message || (isFav ? 'Saved to favorites.' : 'Removed from favorites.'), 'success');
+            } catch (err) {
+                showToast('Failed to update favorites.', 'error');
+            } finally {
+                btn?.removeAttribute('disabled');
+            }
+        }, true);
+
+        // Room request (Inquire / Reserve)
+        document.addEventListener('submit', async (e) => {
+            const form = e.target;
+            if (!(form instanceof HTMLFormElement)) return;
+            const action = form.getAttribute('action') || '';
+            if (!action.includes('/pages/room_request.php')) return;
+            e.preventDefault();
+
+            const btn = form.querySelector('button[type="submit"]');
+            btn?.setAttribute('disabled', 'disabled');
+
+            try {
+                const { data } = await postFormJson(form);
+                if (!data?.ok) {
+                    showToast(data?.message || 'Request failed.', 'error');
+                    return;
+                }
+                if (btn) {
+                    btn.innerHTML = '<i class="fas fa-hourglass-half"></i> Request Pending';
+                    btn.setAttribute('disabled', 'disabled');
+                }
+                showToast(data.message || 'Request sent.', 'success');
+            } catch (err) {
+                showToast('Request failed.', 'error');
+                btn?.removeAttribute('disabled');
+            }
+        }, true);
+
+        // Notifications: mark read / mark all
+        document.addEventListener('submit', async (e) => {
+            const form = e.target;
+            if (!(form instanceof HTMLFormElement)) return;
+            const action = form.getAttribute('action') || window.location.href;
+            if (!action.includes('/pages/notifications.php') && !window.location.pathname.endsWith('/pages/notifications.php')) return;
+
+            const act = (form.querySelector('input[name="action"]')?.value || '').trim();
+            if (act !== 'mark_read' && act !== 'mark_all') return;
+
+            e.preventDefault();
+            const btn = form.querySelector('button[type="submit"]');
+            btn?.setAttribute('disabled', 'disabled');
+
+            try {
+                const { data } = await postFormJson(form);
+                if (!data?.ok) {
+                    showToast('Failed to update notifications.', 'error');
+                    return;
+                }
+
+                const unread = parseInt(data.unread || '0', 10) || 0;
+                updateNotifBadges(unread);
+
+                if (act === 'mark_all') {
+                    document.querySelectorAll('[data-notif-new]').forEach(n => n.remove());
+                    document.querySelectorAll('[data-notif-row]').forEach(r => { r.style.opacity = '.75'; });
+                } else {
+                    const id = form.querySelector('input[name="id"]')?.value;
+                    if (id) {
+                        document.querySelector(`[data-notif-new="${CSS.escape(id)}"]`)?.remove();
+                        const row = document.querySelector(`[data-notif-row="${CSS.escape(id)}"]`);
+                        if (row) row.style.opacity = '.75';
+                    }
+                }
+
+                showToast('Updated.', 'success');
+            } catch (err) {
+                showToast('Failed to update notifications.', 'error');
+            } finally {
+                btn?.removeAttribute('disabled');
+            }
+        }, true);
+
+    })();
+    // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Custom Select (styled dropdown) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
     (function initCustomSelects() {
         const isTouchLike =
             window.matchMedia?.('(pointer: coarse)')?.matches ||
@@ -236,14 +446,14 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     })();
 
-    // ── Auto-close Flash ──
+    // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Auto-close Flash ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
     document.querySelectorAll('.flash').forEach(flash => {
         setTimeout(() => {
             flash.closest('.flash-container')?.remove();
         }, 5000);
     });
 
-    // ── Role Selector ──
+    // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Role Selector ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
     document.querySelectorAll('.role-option').forEach(opt => {
         opt.addEventListener('click', function () {
             document.querySelectorAll('.role-option').forEach(o => o.classList.remove('selected'));
@@ -253,7 +463,7 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     });
 
-    // ── Password Toggle ──
+    // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Password Toggle ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
     document.querySelectorAll('[data-toggle-password]').forEach(btn => {
         btn.addEventListener('click', function () {
             const input = document.querySelector(this.dataset.togglePassword);
@@ -269,7 +479,32 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     });
 
-    // ── File Upload Preview ──
+
+
+    // Sync plan selection to proof upload (so owner doesn’t pick plan twice)
+    (function syncProofPlan() {
+        const paypalPlan = document.querySelector('form[action$="paypal_owner_sub_start.php"] select[name="plan"]');
+        const proofPlan = document.getElementById('proofPlan');
+        if (!paypalPlan || !proofPlan) return;
+        const apply = () => { proofPlan.value = paypalPlan.value || 'basic'; };
+        paypalPlan.addEventListener('change', apply);
+        apply();
+    })();
+
+    // Custom file inputs: display selected filename
+    document.querySelectorAll('.be-file-input').forEach(input => {
+        const wrap = input.closest('.be-file');
+        const nameEl = wrap ? wrap.querySelector('.be-file-name') : null;
+        function update() {
+            if (!nameEl) return;
+            const file = input.files && input.files[0] ? input.files[0] : null;
+            nameEl.textContent = file ? file.name : '';
+        }
+        input.addEventListener('change', update);
+        update();
+    });
+
+    // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ File Upload Preview ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
     document.querySelectorAll('.file-upload').forEach(zone => {
         const input = zone.querySelector('input[type="file"]');
         const previewContainer = zone.nextElementSibling;
@@ -302,7 +537,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     const div = document.createElement('div');
                     div.className = 'preview-item';
                     div.innerHTML = `<img src="${e.target.result}" alt="${file.name}">
-                        <button type="button" class="preview-remove" onclick="this.parentElement.remove()">×</button>
+                        <button type="button" class="preview-remove" onclick="this.parentElement.remove()">ÃƒÆ’Ã¢â‚¬â€</button>
                         <span class="preview-name">${file.name}</span>`;
                     previewContainer.appendChild(div);
                 };
@@ -311,7 +546,7 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     });
 
-    // ── Gallery Thumbnails ──
+    // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Gallery Thumbnails ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
     document.querySelectorAll('.gallery-thumb').forEach(thumb => {
         thumb.addEventListener('click', function () {
             const mainImg = document.querySelector('.gallery-main img');
@@ -320,7 +555,7 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     });
 
-    // ── Confirm Actions ──
+    // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Confirm Actions ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
     document.querySelectorAll('[data-confirm]').forEach(el => {
         el.addEventListener('click', function (e) {
             if (!confirm(this.dataset.confirm || 'Are you sure?')) {
@@ -329,7 +564,7 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     });
 
-    // ── Price Range Inputs ──
+    // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Price Range Inputs ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
     const minPrice = document.getElementById('minPrice');
     const maxPrice = document.getElementById('maxPrice');
     if (minPrice && maxPrice) {
@@ -340,7 +575,7 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
-    // ── Character Count ──
+    // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Character Count ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
     document.querySelectorAll('[data-maxlength]').forEach(el => {
         const max = parseInt(el.dataset.maxlength);
         const counter = document.querySelector(`[data-counter="${el.id}"]`);
@@ -353,7 +588,7 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     });
 
-    // ── Form validation helpers ──
+    // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Form validation helpers ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
     document.querySelectorAll('form[data-validate]').forEach(form => {
         form.addEventListener('submit', function (e) {
             let valid = true;
@@ -375,7 +610,7 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     });
 
-    // ── Tab Switcher ──
+    // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Tab Switcher ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
     document.querySelectorAll('[data-tab]').forEach(tab => {
         tab.addEventListener('click', function () {
             const group = this.closest('[data-tab-group]');
@@ -388,7 +623,7 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     });
 
-    // ── Smooth number animation ──
+    // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Smooth number animation ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
     document.querySelectorAll('[data-count]').forEach(el => {
         const target = parseInt(el.dataset.count);
         let current = 0;
@@ -612,5 +847,26 @@ document.addEventListener('DOMContentLoaded', function () {
                 preview.innerHTML = '';
             });
         });
+
     });
+
+    // Subscription payment modal
+    const subModal = document.getElementById('subscriptionModal');
+    if (subModal) {
+        function closeSubModal() {
+            subModal.classList.remove('open');
+            subModal.setAttribute('aria-hidden', 'true');
+        }
+
+        subModal.querySelectorAll('[data-close-modal]').forEach(el => el.addEventListener('click', closeSubModal));
+        document.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape' && subModal.classList.contains('open')) closeSubModal();
+        });
+    }
 });
+
+
+
+
+
+

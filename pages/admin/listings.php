@@ -1,4 +1,4 @@
-﻿<?php
+<?php
 require_once __DIR__ . '/_common.php';
 
 $pageTitle = 'Listing Management';
@@ -46,7 +46,7 @@ if ($search !== '') {
     $params[] = '%' . $search . '%';
 }
 
-$cols = "bh.id, bh.name, bh.city, bh.status, bh.created_at, u.full_name AS owner_name, u.email AS owner_email";
+$cols = "bh.id, bh.name, bh.city, bh.status, bh.created_at, u.full_name AS owner_name, u.email AS owner_email, (SELECT COUNT(*) FROM reports rp WHERE rp.boarding_house_id = bh.id) AS report_count";
 if ($hasRejectedReason) $cols .= ", bh.rejected_reason";
 
 $sql = "SELECT $cols
@@ -68,11 +68,11 @@ require_once __DIR__ . '/../../includes/header.php';
     <div class="dash-content">
       <div class="dash-heading">
         <div>
-          <h1 class="dash-title">Listings</h1>
+          <h1 class="dash-title">Property Listings</h1>
           <div class="dash-breadcrumb">
             <a href="dashboard.php">Admin</a>
             <i class="fas fa-chevron-right" style="font-size:.7rem"></i>
-            <span>Listings</span>
+            <span>Property Listings</span>
           </div>
         </div>
       </div>
@@ -81,7 +81,7 @@ require_once __DIR__ . '/../../includes/header.php';
       <div class="card">
         <div class="card-header" style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap">
           <div>
-            <h2 style="margin:0;font-family:var(--font-display);font-size:1.2rem;font-weight:800">Moderate Listings</h2>
+            <h2 style="margin:0;font-family:var(--font-display);font-size:1.2rem;font-weight:800">Moderate Property Listings</h2>
             <div class="text-muted text-sm" style="margin-top:4px"><?= number_format(count($rows)) ?> result(s).</div>
           </div>
 
@@ -107,7 +107,7 @@ require_once __DIR__ . '/../../includes/header.php';
                 <tr>
                   <th>Listing</th>
                   <th>Owner</th>
-                  <th>Status</th>
+                  <th>Status</th><th>Reports</th>
                   <th>Created</th>
                   <th style="width:360px">Actions</th>
                 </tr>
@@ -128,7 +128,9 @@ require_once __DIR__ . '/../../includes/header.php';
                   </td>
                   <td>
                     <span class="badge" style="background:var(--bg);border:1px solid var(--border)"><?= sanitize($status) ?></span>
-                  </td>
+                  </td>                   <td>
+                     <span class="badge" style="background:var(--bg);border:1px solid var(--border)"><?= intval($r['report_count'] ?? 0) ?></span>
+                   </td>
                   <td class="text-muted text-sm"><?= sanitize(date('M d, Y', strtotime((string)($r['created_at'] ?? '')))) ?></td>
                   <td>
                     <div class="flex flex-wrap gap-2">
@@ -167,5 +169,9 @@ require_once __DIR__ . '/../../includes/header.php';
 </div>
 
 <?php require_once __DIR__ . '/../../includes/footer.php'; ?>
+
+
+
+
 
 

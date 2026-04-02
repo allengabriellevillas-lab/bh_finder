@@ -1,4 +1,4 @@
-﻿<?php
+<?php
 require_once __DIR__ . '/../includes/config.php';
 
 requireTenant();
@@ -71,7 +71,7 @@ require_once __DIR__ . '/../includes/header.php';
           <i class="fas fa-comments"></i>
           <h3>No messages yet</h3>
           <p>Start a chat from any listing page.</p>
-          <a class="btn btn-primary" href="<?= SITE_URL ?>/index.php#listings"><i class="fas fa-search"></i> Browse Listings</a>
+          <a class="btn btn-primary" href="<?= SITE_URL ?>/index.php#listings"><i class="fas fa-search"></i> Browse Property Listings</a>
         </div>
       <?php else: ?>
         <div class="chat-thread-list">
@@ -104,3 +104,4 @@ require_once __DIR__ . '/../includes/header.php';
 </div>
 
 <?php require_once __DIR__ . '/../includes/footer.php'; ?>
+
