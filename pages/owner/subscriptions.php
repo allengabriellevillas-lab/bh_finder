@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 require_once __DIR__ . '/../../includes/config.php';
 
 requireOwner();
@@ -7,20 +7,22 @@ requireVerifiedOwner();
 $uid = intval($_SESSION['user_id'] ?? 0);
 $db = getDB();
 ensurePaymentsSubscriptionIdColumn();
+ensureOwnerSubscriptionTrialColumns();
 $pageTitle = 'Subscriptions';
 
 ensureSubscriptionExpiringNotifications($uid);
+maybeNotifyOwnerTrialLifecycle($uid);
 
 $days = max(1, intval(getSetting('owner_subscription_days', '30') ?? '30'));
 $basicMax = max(1, intval(getSetting('owner_subscription_basic_max_properties', '1') ?? '1'));
 $basicPricing = ownerSubscriptionPricing('basic');
 $proPricing = ownerSubscriptionPricing('pro');
 $introActive = intval($basicPricing['is_intro'] ?? 0) === 1;
+$activeSub = getActiveOwnerSubscription($uid);
 $defaultPlan = strtolower(trim((string)($_GET['plan'] ?? '')));
 if (!in_array($defaultPlan, ['basic','pro'], true)) $defaultPlan = $activeSub ? strtolower((string)($activeSub['plan'] ?? 'basic')) : 'basic';
 if (!in_array($defaultPlan, ['basic','pro'], true)) $defaultPlan = 'basic';
 
-$activeSub = getActiveOwnerSubscription($uid);
 $latestPending = null;
 $payments = [];
 
@@ -70,7 +72,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $subId = intval($activeSub['id'] ?? 0);
 
                 if ($subId <= 0) {
-                    $insSub = $db->prepare("INSERT INTO owner_subscriptions (owner_id, plan, status) VALUES (?,?, 'pending')");
+                    $insSub = $db->prepare("INSERT INTO owner_subscriptions (owner_id, plan, status, is_trial) VALUES (?,?, 'pending', 0)");
                     $insSub->execute([$uid, $plan]);
                     $subId = intval($db->lastInsertId());
                 }
@@ -140,7 +142,7 @@ require_once __DIR__ . '/../../includes/header.php';
         <div class="card">
           <div class="card-header">
             <h2 style="margin:0;font-family:var(--font-display);font-size:1.2rem;font-weight:800">Your Plan</h2>
-            <div class="text-muted text-sm" style="margin-top:4px">Subscriptions are per property (rooms are free). You need an active subscription to add a new property.</div>
+            <div class="text-muted text-sm" style="margin-top:4px">Pro is optional. Free plan owners can list properties with limits; upgrade to Pro for unlimited listings, priority ranking, and analytics.</div>
           </div>
           <div class="card-body">
 
@@ -213,8 +215,8 @@ require_once __DIR__ . '/../../includes/header.php';
                     <div class="form-group" style="margin:0">
                       <label class="form-label">Plan</label>
                       <select name="plan" class="form-control">
-                        <option value="basic" <?= $defaultPlan === 'basic' ? 'selected' : '' ?>>Basic (<?= formatPrice((float)($basicPricing['paid'] ?? 0)) ?><?= $introActive ? (' · Regular ' . formatPrice((float)($basicPricing['original'] ?? 0))) : '' ?> · up to <?= intval($basicMax) ?> properties)</option>
-                        <option value="pro" <?= $defaultPlan === 'pro' ? 'selected' : '' ?>>Pro (<?= formatPrice((float)($proPricing['paid'] ?? 0)) ?><?= $introActive ? (' · Regular ' . formatPrice((float)($proPricing['original'] ?? 0))) : '' ?> · unlimited properties)</option>
+                        <option value="basic" <?= $defaultPlan === 'basic' ? 'selected' : '' ?>>Basic (<?= formatPrice((float)($basicPricing['paid'] ?? 0)) ?><?= $introActive ? (' (Regular ' . formatPrice((float)($basicPricing['original'] ?? 0)) . ')') : '' ?>, up to <?= intval($basicMax) ?> properties)</option>
+                        <option value="pro" <?= $defaultPlan === 'pro' ? 'selected' : '' ?>>Pro (<?= formatPrice((float)($proPricing['paid'] ?? 0)) ?><?= $introActive ? (' (Regular ' . formatPrice((float)($proPricing['original'] ?? 0)) . ')') : '' ?>, unlimited properties)</option>
                       </select>
                     </div>
                   </div>
@@ -300,6 +302,11 @@ require_once __DIR__ . '/../../includes/header.php';
 </div>
 
 <?php require_once __DIR__ . '/../../includes/footer.php'; ?>
+
+
+
+
+
 
 
 

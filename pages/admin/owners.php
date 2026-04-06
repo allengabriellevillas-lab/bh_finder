@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 require_once __DIR__ . '/_common.php';
 
 $pageTitle = 'Owner Verification';
@@ -54,10 +54,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($hasOwnerVerified || $hasOwnerVSta
                 $stmt->execute([$id]);
             }
             adminLog($db, 'owner_verified', 'users', $id);
+            // Auto-start owner trial after approval (best-effort)
+            $trialStarted = false;
+            try { $trialStarted = startOwnerTrialIfMissing($id, 14); } catch (Throwable $e) { $trialStarted = false; }
+
             // Notification (best-effort)
             try {
-                if (notificationsEnabled() && function_exists('createNotification')) {
-                    createNotification($db, $id, 'Verification approved', 'Your owner verification has been approved.', SITE_URL . '/pages/owner/dashboard.php');
+                if (notificationsEnabled()) {
+                    $body = $trialStarted
+                        ? 'Your owner verification has been approved. Your 14-day trial is now active.'
+                        : 'Your owner verification has been approved.';
+                    createNotification(
+                        $id,
+                        'owner_verified',
+                        'Verification approved',
+                        $body,
+                        SITE_URL . '/pages/owner/dashboard.php'
+                    );
                 }
             } catch (Throwable $e) {
                 // ignore
@@ -79,10 +92,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($hasOwnerVerified || $hasOwnerVSta
                 adminLog($db, 'owner_rejected', 'users', $id);
                 // Notification (best-effort)
                 try {
-                    if (notificationsEnabled() && function_exists('createNotification')) {
+                    if (notificationsEnabled()) {
                         $msg = 'Your owner verification was rejected.';
                         if ($reason !== '') $msg .= ' Reason: ' . $reason;
-                        createNotification($db, $id, 'Verification rejected', $msg, SITE_URL . '/pages/owner/verification.php');
+                        createNotification(
+                            $id,
+                            'owner_verification_rejected',
+                            'Verification rejected',
+                            $msg,
+                            SITE_URL . '/pages/owner/verification.php'
+                        );
                     }
                 } catch (Throwable $e) {
                     // ignore
@@ -219,8 +238,8 @@ require_once __DIR__ . '/../../includes/header.php';
                           <div class="text-muted text-xs"><?= sanitize($o['email'] ?? '') ?></div>
                           <?php if ($hasOwnerIdDoc && !empty($o['owner_id_doc_path'])): ?>
                             <div class="text-muted text-xs" style="margin-top:6px">
-                              <a href="<?= UPLOAD_URL . sanitize((string)$o['owner_id_doc_path']) ?>" target="_blank" rel="noopener">
-                                <i class="fas fa-id-card"></i> View ID
+                              <a href="<?= UPLOAD_URL . sanitize((string)$o['owner_id_doc_path']) ?>" target="_blank" rel="noopener" title="View ID" aria-label="View ID">
+                                <i class="fas fa-id-card"></i><span class="sr-only">View ID</span>
                               </a>
                             </div>
                           <?php endif; ?>
@@ -239,7 +258,7 @@ require_once __DIR__ . '/../../includes/header.php';
                             <form method="POST" action="" style="display:inline">
                               <input type="hidden" name="action" value="approve">
                               <input type="hidden" name="id" value="<?= $id ?>">
-                              <button class="btn btn-primary btn-sm" type="submit"><i class="fas fa-check"></i> Approve</button>
+                              <button class="btn btn-primary btn-sm btn-icon" type="submit" title="Approve" aria-label="Approve"><i class="fas fa-check"></i></button>
                             </form>
 
                             <form method="POST" action="" style="display:inline">
@@ -247,9 +266,9 @@ require_once __DIR__ . '/../../includes/header.php';
                               <input type="hidden" name="id" value="<?= $id ?>">
                               <?php if ($hasOwnerVStatus): ?>
                                 <input type="hidden" name="reason" value="Invalid / insufficient ID">
-                                <button class="btn btn-ghost btn-sm" type="submit" data-confirm="Reject this owner?"><i class="fas fa-ban"></i> Reject</button>
+                                <button class="btn btn-ghost btn-sm btn-icon" type="submit" title="Reject" aria-label="Reject" data-confirm="Reject this owner?"><i class="fas fa-ban"></i></button>
                               <?php else: ?>
-                                <button class="btn btn-ghost btn-sm" type="submit" data-confirm="Reject this owner? (Will deactivate the account)"><i class="fas fa-ban"></i> Reject</button>
+                                <button class="btn btn-ghost btn-sm btn-icon" type="submit" title="Reject" aria-label="Reject" data-confirm="Reject this owner? (Will deactivate the account)"><i class="fas fa-ban"></i></button>
                               <?php endif; ?>
                             </form>
                           </div>
@@ -268,3 +287,9 @@ require_once __DIR__ . '/../../includes/header.php';
 </div>
 
 <?php require_once __DIR__ . '/../../includes/footer.php'; ?>
+
+
+
+
+
+

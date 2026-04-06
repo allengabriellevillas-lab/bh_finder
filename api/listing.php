@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 require_once __DIR__ . '/_bootstrap.php';
 
 requireMethod('GET');
@@ -16,7 +16,6 @@ $hasExpiresAt = in_array('expires_at', $bhFields, true);
 
 $activeWhere = "";
 if ($hasIsActive) $activeWhere .= " AND bh.is_active = 1";
-if ($hasExpiresAt) $activeWhere .= " AND (bh.expires_at IS NULL OR bh.expires_at >= NOW())";
 $approvalWhere = "";
 if ($hasApprovalStatus) {
     if (isAdmin()) {
@@ -29,6 +28,22 @@ if ($hasApprovalStatus) {
 }
 
 
+$ownerAccessWhere = "";
+$ownerActiveClause = ownerActiveSqlWhere($db, 'bh.owner_id');
+$ownerActiveExpr = $ownerActiveClause !== "" ? preg_replace('/^\s*AND\s+/i', "", trim($ownerActiveClause)) : "";
+if (!isAdmin()) {
+    if (isLoggedIn()) {
+        $uid = intval($_SESSION['user_id'] ?? 0);
+        if ($uid > 0 && $ownerActiveExpr !== "") {
+            $ownerAccessWhere = " AND (bh.owner_id = {$uid} OR {$ownerActiveExpr})";
+        } elseif ($ownerActiveClause !== "") {
+            $ownerAccessWhere = $ownerActiveClause;
+        }
+    } else {
+        $ownerAccessWhere = $ownerActiveClause;
+    }
+}
+
 $stmt = $db->prepare("
   SELECT
     bh.*,
@@ -38,7 +53,7 @@ $stmt = $db->prepare("
     u.created_at AS owner_since
   FROM boarding_houses bh
   JOIN users u ON u.id = bh.owner_id
-  WHERE bh.id = ?\\n      AND (bh.status != 'inactive')$activeWhere$approvalWhere
+  WHERE bh.id = ?\\n      AND (bh.status != 'inactive')$activeWhere$approvalWhere$ownerAccessWhere
   LIMIT 1
 ");
 $stmt->execute([$id]);
@@ -117,5 +132,6 @@ $data = [
 ];
 
 jsonResponse(['data' => $data]);
+
 
 

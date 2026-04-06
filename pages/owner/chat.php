@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 require_once __DIR__ . '/../../includes/config.php';
 requireOwner();
 
@@ -33,7 +33,7 @@ if (!$thread) {
     exit;
 }
 
-$pageTitle = 'Chat Ãƒâ€šÃ‚Â· ' . sanitize($thread['bh_name'] ?? 'Listing');
+$pageTitle = 'Chat | ' . sanitize($thread['bh_name'] ?? 'Listing');
 
 // Send message
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['send_message'])) {
@@ -161,6 +161,7 @@ require_once __DIR__ . '/../../includes/header.php';
 
 
 <?php require_once __DIR__ . '/../../includes/footer.php'; ?>
+
 
 
 

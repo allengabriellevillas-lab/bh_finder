@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 require_once __DIR__ . '/../../includes/config.php';
 requireOwner();
 
@@ -88,14 +88,14 @@ require_once __DIR__ . '/../../includes/header.php';
               <?php foreach ($threads as $t):
                 $unread = intval($t['unread_count'] ?? 0);
                 $snippet = trim((string)($t['last_message'] ?? ''));
-                if ($snippet !== '' && textLength($snippet) > 90) $snippet = textSlice($snippet, 0, 90) . 'ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¦';
+                if ($snippet !== '' && textLength($snippet) > 90) $snippet = textSlice($snippet, 0, 90) . '...';
                 $when = $t['last_message_time'] ? date('M d, H:i', strtotime((string)$t['last_message_time'])) : '';
               ?>
                 <a class="chat-thread" href="chat.php?thread_id=<?= intval($t['id']) ?>">
                   <div class="chat-thread-main">
                     <div class="chat-thread-title">
                       <strong><?= sanitize($t['bh_name'] ?? 'Listing') ?></strong>
-                      <span class="text-muted" style="font-size:.85rem">ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· <?= sanitize($t['tenant_name'] ?? 'Tenant') ?></span>
+                      <span class="text-muted" style="font-size:.85rem">&middot; <?= sanitize($t['tenant_name'] ?? 'Tenant') ?></span>
                     </div>
                     <div class="chat-thread-meta">
                       <span class="text-muted text-sm"><?= sanitize($snippet !== '' ? $snippet : 'No messages yet') ?></span>

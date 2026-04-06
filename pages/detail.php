@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 require_once __DIR__ . '/../includes/config.php';
 
 $id = intval($_GET['id'] ?? 0);
@@ -28,7 +28,6 @@ $hasIsActive = in_array('is_active', $bhFields, true);
 $hasExpiresAt = in_array('expires_at', $bhFields, true);
 $activeWhere = '';
 if ($hasIsActive) $activeWhere .= " AND bh.is_active = 1";
-if ($hasExpiresAt) $activeWhere .= " AND (bh.expires_at IS NULL OR bh.expires_at >= NOW())";
 $approvalWhere = "";
 if ($hasApprovalStatus) {
     if (isAdmin()) {
@@ -39,6 +38,23 @@ if ($hasApprovalStatus) {
         $approvalWhere = " AND bh.approval_status = 'approved'";
     }
 }
+
+$ownerAccessWhere = "";
+$ownerActiveClause = ownerActiveSqlWhere($db, 'bh.owner_id');
+$ownerActiveExpr = $ownerActiveClause !== "" ? preg_replace('/^\s*AND\s+/i', "", trim($ownerActiveClause)) : "";
+if (!isAdmin()) {
+    if (isLoggedIn()) {
+        $uid = intval($_SESSION['user_id'] ?? 0);
+        if ($uid > 0 && $ownerActiveExpr !== "") {
+            $ownerAccessWhere = " AND (bh.owner_id = {$uid} OR {$ownerActiveExpr})";
+        } elseif ($ownerActiveClause !== "") {
+            $ownerAccessWhere = $ownerActiveClause;
+        }
+    } else {
+        $ownerAccessWhere = $ownerActiveClause;
+    }
+}
+
 $hasViews = in_array('views', $bhFields, true);
 
 $stmt = $db->prepare("
@@ -51,7 +67,7 @@ $stmt = $db->prepare("
         $ownerSelectExtra
     FROM boarding_houses bh
     JOIN users u ON u.id = bh.owner_id
-    WHERE bh.id = ? AND bh.status != 'inactive'$activeWhere$approvalWhere
+    WHERE bh.id = ? AND bh.status != 'inactive'$activeWhere$approvalWhere$ownerAccessWhere
 ");
 $stmt->execute([$id]);
 $bh = $stmt->fetch();
@@ -212,6 +228,7 @@ $bhContactEmail = trim((string)($bh['contact_email'] ?? ($bh['owner_email'] ?? '
 $ownerName = (string)($bh['owner_name'] ?? 'Property Owner');
 $ownerSince = (string)($bh['owner_since'] ?? '');
 $ownerVerified = ((string)($bh['owner_verification_status'] ?? '') === 'verified') || (intval($bh['owner_verified'] ?? 0) === 1);
+$isPremiumOwner = strtolower((string)($bh['owner_plan_type'] ?? '')) === 'pro';
 $bhMapQuery = $bhFullLocation !== '' ? rawurlencode($bhFullLocation) : '';
 $bhMapEmbedUrl = $bhMapQuery !== '' ? ("https://www.google.com/maps?q={$bhMapQuery}&output=embed") : '';
 $bhMapLinkUrl = $bhMapQuery !== '' ? ("https://www.google.com/maps?q={$bhMapQuery}") : '';
@@ -504,24 +521,28 @@ require_once __DIR__ . '/../includes/header.php';
                 </div>
 
                 <div class="room-card-actions">
-                  <?php if ($roomStatus === 'available' && $roomSubOk && isLoggedIn() && isTenant() && intval($bh['owner_id'] ?? 0) !== intval($_SESSION['user_id'] ?? 0)): ?>
+                  <?php if (isLoggedIn() && isTenant() && intval($bh['owner_id'] ?? 0) !== intval($_SESSION['user_id'] ?? 0)): ?>
                     <?php if ($requestStatus === 'pending'): ?>
                       <button class="btn btn-ghost btn-sm" type="button" disabled><i class="fas fa-hourglass-half"></i> Request Pending</button>
                     <?php elseif (in_array($requestStatus, ['approved','occupied'], true)): ?>
                       <button class="btn btn-ghost btn-sm" type="button" disabled><i class="fas fa-circle-check"></i> Assigned to You</button>
-                    <?php else: ?>
+                    <?php elseif ($roomStatus === 'available' && $roomSubOk): ?>
                       <form method="POST" action="<?= SITE_URL ?>/pages/room_request.php">
                         <input type="hidden" name="room_id" value="<?= $roomId ?>">
                         <input type="hidden" name="redirect" value="<?= sanitize('/pages/detail.php?id=' . $id . '#rooms') ?>">
                         <button class="btn btn-primary btn-sm" type="submit"><i class="fas fa-paper-plane"></i> Inquire / Reserve</button>
                       </form>
+                    <?php elseif ($roomStatus === 'available' && !$roomSubOk): ?>
+                      <button class="btn btn-ghost btn-sm" type="button" disabled><i class="fas fa-ban"></i> Subscription Inactive</button>
+                    <?php else: ?>
+                      <button class="btn btn-ghost btn-sm" type="button" disabled><i class="fas fa-ban"></i> Not Available</button>
                     <?php endif; ?>
-                  <?php elseif ($roomStatus === 'available' && !$roomSubOk): ?>
-  <button class="btn btn-ghost btn-sm" type="button" disabled><i class="fas fa-ban"></i> Subscription Inactive</button>
-<?php elseif ($roomStatus === 'available' && !isLoggedIn()): ?>
+                  <?php elseif ($roomStatus === 'available' && !isLoggedIn()): ?>
                     <a class="btn btn-primary btn-sm" href="<?= SITE_URL ?>/login.php?redirect=<?= urlencode('/pages/detail.php?id=' . $id . '#rooms') ?>">
                       <i class="fas fa-lock"></i> Login to Inquire
                     </a>
+                  <?php elseif ($roomStatus === 'available' && !$roomSubOk): ?>
+                    <button class="btn btn-ghost btn-sm" type="button" disabled><i class="fas fa-ban"></i> Subscription Inactive</button>
                   <?php else: ?>
                     <button class="btn btn-ghost btn-sm" type="button" disabled><i class="fas fa-ban"></i> Not Available</button>
                   <?php endif; ?>
@@ -562,8 +583,16 @@ require_once __DIR__ . '/../includes/header.php';
         <div class="contact-owner">
           <div class="contact-owner-avatar"><?= strtoupper(substr(sanitize($ownerName), 0, 1)) ?></div>
           <div class="contact-owner-info">
-            <strong><?= sanitize($ownerName) ?><?php if ($ownerVerified): ?> <span class="badge status-active" style="margin-left:6px"><i class="fas fa-circle-check"></i> Verified</span><?php endif; ?><?php if ($isPremiumOwner): ?> <span class="badge" style="margin-left:6px;background:rgba(var(--primary-rgb),0.12);color:var(--primary);border:1px solid rgba(var(--primary-rgb),0.25)"><i class="fas fa-crown"></i> Premium Owner</span><?php endif; ?></strong>
-            <span>Property Owner &middot; Member since <?= $ownerSince ? date('Y', strtotime($ownerSince)) : '' ?></span>
+            <div class="contact-owner-title">
+              <span class="contact-owner-name"><?= sanitize($ownerName) ?></span>
+              <?php if ($ownerVerified): ?>
+                <span class="badge status-active"><i class="fas fa-circle-check"></i> Verified</span>
+              <?php endif; ?>
+              <?php if ($isPremiumOwner): ?>
+                <span class="badge badge-premium"><i class="fas fa-crown"></i> Premium Owner</span>
+              <?php endif; ?>
+            </div>
+            <span class="contact-owner-meta">Property Owner &middot; Member since <?= $ownerSince ? date('Y', strtotime($ownerSince)) : '' ?></span>
           </div>
         </div>
 
@@ -646,6 +675,9 @@ require_once __DIR__ . '/../includes/header.php';
 </div>
 
 <?php require_once __DIR__ . '/../includes/footer.php'; ?>
+
+
+
 
 
 

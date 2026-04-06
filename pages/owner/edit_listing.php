@@ -1,6 +1,8 @@
-<?php
+﻿<?php
 require_once __DIR__ . '/../../includes/config.php';
 requireOwner();
+requireVerifiedOwner();
+requireOwnerActiveAccess();
 
 $id = intval($_GET['id'] ?? 0);
 $db = getDB();
@@ -153,7 +155,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($replaceCoverUploaded) {
                 $newCover = uploadImage($_FILES['replace_cover_image'], 'bh' . $id . '_cover');
                 if ($newCover === false) {
-                    throw new RuntimeException('Cover image upload failed. Please use JPG, PNG, or WebP under 5MB.');
+                    $errors['replace_cover_image'] = 'Failed to upload cover image. Please use JPG, PNG, or WebP (max 5MB).';
                 }
 
                 // Replacement takes priority over the remove checkbox.
@@ -384,13 +386,13 @@ require_once __DIR__ . '/../../includes/header.php';
             <?php endforeach; ?>
           </div>
         </div>
-        <p class="form-hint">Click ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â to mark an extra photo for deletion, then save your changes.</p>
+        <p class="form-hint">Click &times; to mark an extra photo for deletion, then save your changes.</p>
         <?php endif; ?>
         <div class="file-upload" style="margin-top:12px">
           <input type="file" name="images[]" accept="image/jpeg,image/png,image/webp" multiple>
           <div class="file-upload-icon"><i class="fas fa-cloud-upload-alt"></i></div>
           <p class="file-upload-text"><strong>Add more photos</strong></p>
-          <p class="file-upload-text" style="font-size:.8rem;margin-top:4px">JPG, PNG, or WebP ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· Max 5MB each</p>
+          <p class="file-upload-text" style="font-size:.8rem;margin-top:4px">JPG, PNG, or WebP &middot; Max 5MB each</p>
         </div>
       </div>
     </div>

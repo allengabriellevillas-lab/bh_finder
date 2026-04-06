@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 require_once __DIR__ . '/../../includes/config.php';
 requireOwner();
 requireVerifiedOwner();
@@ -22,6 +22,7 @@ $isIntro = intval($pricing['is_intro'] ?? 0);
 
 $db = getDB();
 ensurePaymentsSubscriptionIdColumn();
+ensureOwnerSubscriptionTrialColumns();
 
 try {
     $activeSub = getActiveOwnerSubscription($uid);
@@ -30,7 +31,7 @@ try {
 
     $subId = intval($activeSub['id'] ?? 0);
     if ($subId <= 0) {
-        $insSub = $db->prepare("INSERT INTO owner_subscriptions (owner_id, plan, status) VALUES (?,?, 'pending')");
+        $insSub = $db->prepare("INSERT INTO owner_subscriptions (owner_id, plan, status, is_trial) VALUES (?,?, 'pending', 0)");
         $insSub->execute([$uid, $plan]);
         $subId = intval($db->lastInsertId());
     }

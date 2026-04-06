@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 require_once __DIR__ . '/../includes/config.php';
 
 requireLogin();
@@ -33,7 +33,7 @@ try { $bhCols = $db->query('SHOW COLUMNS FROM boarding_houses')->fetchAll() ?: [
 $bhFields = array_map(fn($r) => (string)($r['Field'] ?? ''), $bhCols);
 $activeWhere = '';
 if (in_array('is_active', $bhFields, true)) $activeWhere .= " AND bh.is_active = 1";
-if (in_array('expires_at', $bhFields, true)) $activeWhere .= " AND (bh.expires_at IS NULL OR bh.expires_at >= NOW())";
+$ownerActiveWhere = ownerActiveSqlWhere($db, 'bh.owner_id');
 
 $roomPriceExtraWhere = "price IS NOT NULL AND price > 0";
 if ($enforceRoomSub && $hasRoomSubscription) {
@@ -72,7 +72,7 @@ try {
                 WHERE is_hidden = 0
                 GROUP BY boarding_house_id
             ) rev ON rev.boarding_house_id = bh.id
-            WHERE f.user_id = ? AND bh.status != 'inactive'$activeWhere
+            WHERE f.user_id = ? AND bh.status != 'inactive'$activeWhere$ownerActiveWhere
             ORDER BY f.created_at DESC
         ");
         $stmt->execute([$uid]);
@@ -92,7 +92,7 @@ try {
             JOIN boarding_houses bh ON bh.id = f.boarding_house_id
             $roomPriceJoinSql
             JOIN users u ON u.id = bh.owner_id
-            WHERE f.user_id = ? AND bh.status != 'inactive'$activeWhere
+            WHERE f.user_id = ? AND bh.status != 'inactive'$activeWhere$ownerActiveWhere
             ORDER BY f.created_at DESC
         ");
         $stmt->execute([$uid]);
@@ -184,7 +184,7 @@ require_once __DIR__ . '/../includes/header.php';
 
           <div class="rating-summary">
             <i class="fas fa-star"></i>
-            <span><?= $cnt > 0 ? sanitize(number_format($avg, 1)) : '—' ?></span>
+            <span><?= $cnt > 0 ? sanitize(number_format($avg, 1)) : '&mdash;' ?></span>
             <small>(<?= number_format($cnt) ?>)</small>
           </div>
 
@@ -195,9 +195,9 @@ require_once __DIR__ . '/../includes/header.php';
           ?>
           <div class="property-price">
             <?php if ($pMin > 0): ?>
-              <?= formatPrice($pMin) ?><?php if ($pMax !== null): ?> – <?= formatPrice($pMax) ?><?php endif; ?> <small>/month</small>
+              <?= formatPrice($pMin) ?><?php if ($pMax !== null): ?> &ndash; <?= formatPrice($pMax) ?><?php endif; ?> <small>/month</small>
             <?php else: ?>
-              —
+              &mdash;
             <?php endif; ?>
           </div>
         </div>
@@ -213,5 +213,8 @@ require_once __DIR__ . '/../includes/header.php';
 </div>
 
 <?php require_once __DIR__ . '/../includes/footer.php'; ?>
+
+
+
 
 

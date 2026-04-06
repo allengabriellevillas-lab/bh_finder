@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 require_once __DIR__ . '/_bootstrap.php';
 
 requireMethod('GET');
@@ -10,6 +10,7 @@ $limit = max(1, min(50, intval($_GET['limit'] ?? 20)));
 $offset = max(0, intval($_GET['offset'] ?? 0));
 
 $db = getDB();
+ensureFeaturedListingColumns();
 
 $bhCols = $db->query("SHOW COLUMNS FROM boarding_houses")->fetchAll() ?: [];
 $bhFields = array_map(fn($r) => (string)($r['Field'] ?? ''), $bhCols);
@@ -44,7 +45,6 @@ $roomPriceJoin = "LEFT JOIN (\n"
 
 $conditions = ["bh.status != 'inactive'"];
 if ($hasIsActive) $conditions[] = "bh.is_active = 1";
-if ($hasExpiresAt) $conditions[] = "(bh.expires_at IS NULL OR bh.expires_at >= NOW())";
 if ($hasApprovalStatus) $conditions[] = "bh.approval_status = 'approved'";
 $params = [];
 
@@ -64,6 +64,9 @@ if ($type !== '') {
 }
 
 $where = 'WHERE ' . implode(' AND ', $conditions);
+
+// Only show listings from owners with an active subscription or trial
+$where .= ownerActiveSqlWhere($db, 'bh.owner_id');
 
 // Search monitoring (best-effort)
 try {
@@ -90,11 +93,12 @@ $stmt = $db->prepare("
     bh.total_rooms,
     bh.available_rooms,
     bh.status,
-    (SELECT pi.image_path FROM boarding_house_images pi WHERE pi.boarding_house_id = bh.id AND pi.is_cover = 1 LIMIT 1) AS primary_image
+    (SELECT pi.image_path FROM boarding_house_images pi WHERE pi.boarding_house_id = bh.id AND pi.is_cover = 1 LIMIT 1) AS primary_image,
+    (SELECT plan FROM owner_subscriptions os WHERE os.owner_id = bh.owner_id AND os.status = 'active' AND (os.end_date IS NULL OR os.end_date >= CURDATE()) ORDER BY COALESCE(os.end_date, '9999-12-31') DESC, os.id DESC LIMIT 1) AS owner_plan_type
   FROM boarding_houses bh
   $roomPriceJoin
   $where
-  ORDER BY bh.created_at DESC
+  ORDER BY (CASE WHEN bh.is_featured = 1 AND ((bh.featured_until IS NULL OR bh.featured_until >= NOW()) OR (bh.boost_until IS NULL OR bh.boost_until >= NOW())) THEN 1 ELSE 0 END) DESC, (CASE WHEN owner_plan_type = 'pro' THEN 1 ELSE 0 END) DESC, bh.created_at DESC
   LIMIT $limit OFFSET $offset
 ");
 $stmt->execute($params);
@@ -118,8 +122,11 @@ $listings = array_map(function ($r) {
         'available_rooms' => intval($r['available_rooms'] ?? 0),
         'status' => (string)($r['status'] ?? ''),
         'primary_image_url' => $img !== '' ? (UPLOAD_URL . sanitize($img)) : null,
+        'owner_plan_type' => (string)(['owner_plan_type'] ?? ''),
     ];
 }, $rows);
 
 jsonResponse(['data' => $listings]);
+
+
 

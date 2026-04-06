@@ -1,4 +1,4 @@
--- Boarding House Finder - MySQL schema
+﻿-- Boarding House Finder - MySQL schema
 -- Import this into phpMyAdmin, or run from CLI:
 --   mysql -u root boarding_house_finder < schema.sql
 
@@ -43,6 +43,8 @@ CREATE TABLE IF NOT EXISTS boarding_houses (
   is_active TINYINT(1) NOT NULL DEFAULT 1,
   expires_at DATETIME NULL,
   subscription_id INT UNSIGNED NULL,
+  listing_id INT UNSIGNED NULL,
+  item_key VARCHAR(40) NULL,
   contact_phone VARCHAR(50) NULL,
   contact_email VARCHAR(190) NULL,
   approval_status ENUM('pending','approved','rejected') NOT NULL DEFAULT 'approved',
@@ -52,6 +54,7 @@ CREATE TABLE IF NOT EXISTS boarding_houses (
   views INT UNSIGNED NOT NULL DEFAULT 0,
   is_featured TINYINT(1) NOT NULL DEFAULT 0,
   featured_until DATETIME NULL,
+  boost_until DATETIME NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
@@ -63,6 +66,7 @@ CREATE TABLE IF NOT EXISTS boarding_houses (
   KEY idx_bh_views (views),
   KEY idx_bh_featured (is_featured),
   KEY idx_bh_featured_until (featured_until),
+  KEY idx_bh_boost_until (boost_until),
   CONSTRAINT fk_bh_owner FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE,
   CONSTRAINT fk_bh_approved_by FOREIGN KEY (approved_by) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -71,16 +75,21 @@ CREATE TABLE IF NOT EXISTS boarding_houses (
 CREATE TABLE IF NOT EXISTS owner_subscriptions (
   id INT UNSIGNED NOT NULL AUTO_INCREMENT,
   owner_id INT UNSIGNED NOT NULL,
-  plan ENUM('basic','pro') NOT NULL DEFAULT 'basic',
+  plan ENUM('trial','basic','pro') NOT NULL DEFAULT 'basic',
   status ENUM('pending','active','expired','rejected') NOT NULL DEFAULT 'pending',
   start_date DATE NULL,
   end_date DATE NULL,
+  trial_start DATETIME NULL,
+  trial_end DATETIME NULL,
+  is_trial TINYINT(1) NOT NULL DEFAULT 1,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   KEY idx_os_owner (owner_id),
   KEY idx_os_status (status),
-  KEY idx_os_end (end_date)
+  KEY idx_os_end (end_date),
+  KEY idx_os_trial (is_trial),
+  KEY idx_os_trial_end (trial_end)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS boarding_house_images (
@@ -319,7 +328,9 @@ CREATE TABLE IF NOT EXISTS payments (
   user_id INT UNSIGNED NOT NULL,
   room_id INT UNSIGNED NULL,
   subscription_id INT UNSIGNED NULL,
-  kind ENUM('room_subscription','owner_subscription') NOT NULL DEFAULT 'owner_subscription',
+  listing_id INT UNSIGNED NULL,
+  item_key VARCHAR(40) NULL,
+  kind ENUM('room_subscription','owner_subscription','service_fee','listing_boost') NOT NULL DEFAULT 'owner_subscription',
   plan ENUM('basic','pro') NULL,
   plan_type ENUM('basic','pro') NULL,
   original_price DECIMAL(10,2) NULL,
@@ -339,6 +350,8 @@ CREATE TABLE IF NOT EXISTS payments (
   KEY idx_pay_user (user_id),
   KEY idx_pay_room (room_id),
   KEY idx_pay_sub (subscription_id),
+  KEY idx_pay_listing (listing_id),
+  KEY idx_pay_item_key (item_key),
   KEY idx_pay_kind (kind),
   KEY idx_pay_plan_type (plan_type),
   KEY idx_pay_intro (is_intro),
@@ -373,5 +386,6 @@ CREATE TABLE IF NOT EXISTS admin_warnings (
   KEY idx_warn_owner (owner_id, is_active),
   KEY idx_warn_created (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 
 

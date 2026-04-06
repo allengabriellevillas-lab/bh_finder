@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 require_once __DIR__ . '/_common.php';
 
 $pageTitle = 'Payments';
@@ -64,17 +64,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $hasPayments) {
                         $subRow = null;
                     }
 
-                    // Make all owner properties active until end_date
                     if ($subRow) {
                         $ownerId = intval($subRow['owner_id'] ?? 0);
                         if ($ownerId > 0) {
+                            // No longer controls listing visibility; keep linkage + ensure verified owners remain active.
                             syncOwnerPropertiesToSubscription($ownerId, $subRow);
                             if (notificationsEnabled()) {
                                 createNotification(
                                     $ownerId,
                                     'subscription_approved',
-                                    'Subscription approved',
-                                    'Your subscription payment was approved. Your listings are now active.',
+                                    'Pro upgrade approved',
+                                    'Your Pro upgrade payment was approved. Pro features are now active on your account.',
                                     SITE_URL . '/pages/owner/subscriptions.php'
                                 );
                             }
@@ -82,12 +82,61 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $hasPayments) {
                     }
 
                     adminLog($db, 'owner_subscription_payment_approved', 'payments', $id, ['subscription_id' => $subId, 'plan' => $plan]);
-                    setFlash('success', 'Payment approved and subscription activated.');
+                    setFlash('success', 'Payment approved and Pro upgrade activated.');
+                } elseif ($kind === 'listing_boost') {
+                    ensureFeaturedListingColumns();
+
+                    $ownerId = intval($pay['user_id'] ?? 0);
+                    $listingId = intval($pay['listing_id'] ?? 0);
+                    if ($listingId <= 0) throw new RuntimeException('Missing listing_id.');
+
+                    $itemKey = trim((string)($pay['item_key'] ?? 'boost_7d'));
+                    if (!in_array($itemKey, ['boost_7d', 'homepage_featured'], true)) $itemKey = 'boost_7d';
+                    $boostDays = max(1, intval(getSetting('boost_days', '7') ?? '7'));
+
+                    if ($itemKey === 'homepage_featured') {
+                        $upd = $db->prepare("UPDATE boarding_houses
+                          SET is_featured = 1,
+                              featured_until = DATE_ADD(NOW(), INTERVAL ? DAY)
+                          WHERE id = ?");
+                        $upd->execute([$boostDays, $listingId]);
+                    } else {
+                        $upd = $db->prepare("UPDATE boarding_houses
+                          SET is_featured = 1,
+                              boost_until = DATE_ADD(NOW(), INTERVAL ? DAY)
+                          WHERE id = ?");
+                        $upd->execute([$boostDays, $listingId]);
+                    }
+
+                    if (notificationsEnabled() && $ownerId > 0) {
+                        createNotification(
+                            $ownerId,
+                            'listing_boost_approved',
+                            'Listing boost approved',
+                            'Your listing boost payment was approved. Your listing will be prioritized in search.',
+                            SITE_URL . '/pages/detail.php?id=' . $listingId
+                        );
+                    }
+
+                    adminLog($db, 'listing_boost_payment_approved', 'payments', $id, ['listing_id' => $listingId, 'item_key' => $itemKey]);
+                    setFlash('success', 'Payment approved and listing boosted.');
+                } elseif ($kind === 'service_fee') {
+                    $ownerId = intval($pay['user_id'] ?? 0);
+                    if (notificationsEnabled() && $ownerId > 0) {
+                        createNotification(
+                            $ownerId,
+                            'service_fee_approved',
+                            'Service fee approved',
+                            'Your service fee record was approved.',
+                            SITE_URL . '/pages/owner/dashboard.php'
+                        );
+                    }
+                    adminLog($db, 'service_fee_payment_approved', 'payments', $id);
+                    setFlash('success', 'Payment approved.');
                 } else {
                     adminLog($db, 'payment_approved', 'payments', $id, ['kind' => $kind]);
                     setFlash('success', 'Payment approved.');
                 }
-
                 $db->commit();
             } else {
                 $db->prepare("UPDATE payments
@@ -142,10 +191,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $hasPayments) {
 $status = trim((string)($_GET['status'] ?? ''));
 if (!in_array($status, ['', 'pending', 'approved', 'rejected'], true)) $status = '';
 
+$kindFilter = trim((string)($_GET['kind'] ?? ''));
+$allowedKinds = ['', 'owner_subscription', 'service_fee', 'listing_boost', 'room_subscription'];
+if (!in_array($kindFilter, $allowedKinds, true)) $kindFilter = '';
+unset($allowedKinds);
 $rows = [];
 if ($hasPayments) {
-    $where = "WHERE p.kind = 'owner_subscription'";
+    $where = "WHERE 1=1";
     $params = [];
+    if ($kindFilter !== '') { $where .= " AND p.kind = ?"; $params[] = $kindFilter; }
     if ($status !== '') { $where .= " AND p.status = ?"; $params[] = $status; }
 
     try {
@@ -187,12 +241,18 @@ require_once __DIR__ . '/../../includes/header.php';
         <div class="card">
           <div class="card-header" style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap">
             <div>
-              <h2 style="margin:0;font-family:var(--font-display);font-size:1.2rem;font-weight:800">Owner Subscription Payments</h2>
-              <div class="text-muted text-sm" style="margin-top:4px">Approve property-based subscription payments.</div>
+              <h2 style="margin:0;font-family:var(--font-display);font-size:1.2rem;font-weight:800">Payments</h2>
+              <div class="text-muted text-sm" style="margin-top:4px">Approve and track all payment types (Pro upgrades, boosts, service fees).</div>
             </div>
 
             <form method="GET" action="" class="card-filters">
-              <select name="status" class="form-control">
+                            <select name="kind" class="form-control">
+                <option value="" <?= $kindFilter===''?'selected':'' ?>>All kinds</option>
+                <option value="owner_subscription" <?= $kindFilter==='owner_subscription'?'selected':'' ?>>Pro upgrade</option>
+                <option value="listing_boost" <?= $kindFilter==='listing_boost'?'selected':'' ?>>Listing boost</option>
+                <option value="service_fee" <?= $kindFilter==='service_fee'?'selected':'' ?>>Service fee</option>
+                <option value="room_subscription" <?= $kindFilter==='room_subscription'?'selected':'' ?>>Room subscription</option>
+              </select>              <select name="status" class="form-control">
                 <option value="" <?= $status===''?'selected':'' ?>>All</option>
                 <option value="pending" <?= $status==='pending'?'selected':'' ?>>Pending</option>
                 <option value="approved" <?= $status==='approved'?'selected':'' ?>>Approved</option>
@@ -220,7 +280,7 @@ require_once __DIR__ . '/../../includes/header.php';
                   <thead>
                     <tr>
                       <th>User</th>
-                      <th>Plan / Proof</th>
+                      <th>Kind / Proof</th>
                       <th>Amount</th>
                       <th>Method</th>
                       <th>Status</th>
@@ -246,14 +306,14 @@ require_once __DIR__ . '/../../includes/header.php';
                           <div class="font-bold"><?= $plan ?></div>
                           <?php if ($proof !== ''): ?>
                             <div class="text-muted text-xs" style="margin-top:6px">
-                              <a href="<?= UPLOAD_URL . sanitize($proof) ?>" target="_blank" rel="noopener"><i class="fas fa-image"></i> View proof</a>
+                              <a class="btn btn-ghost btn-sm btn-icon" href="<?= UPLOAD_URL . sanitize($proof) ?>" target="_blank" rel="noopener" title="View proof" aria-label="View proof"><i class="fas fa-image"></i></a>
                             </div>
                           <?php endif; ?>
                         </td>
                         <td><?= formatPrice((float)($r['amount'] ?? 0)) ?></td>
                         <td><span class="badge" style="background:var(--bg);border:1px solid var(--border)"><?= sanitize($r['method'] ?? '') ?></span></td>
                         <td><span class="badge <?= $badge ?>"><?= strtoupper($st) ?></span></td>
-                        <td class="text-muted text-xs"><?= $created !== '' ? sanitize(date('M d, Y H:i', strtotime($created))) : '—' ?></td>
+                        <td class="text-muted text-xs"><?= $created !== '' ? sanitize(date('M d, Y H:i', strtotime($created))) : '&mdash;' ?></td>
                         <td>
                           <?php if ($st !== 'pending'): ?>
                             <div class="text-muted text-sm">Reviewed</div>
@@ -265,8 +325,8 @@ require_once __DIR__ . '/../../includes/header.php';
                               <input type="hidden" name="id" value="<?= $id ?>">
                               <textarea name="admin_note" class="form-control" rows="2" placeholder="Optional admin note..."></textarea>
                               <div style="display:flex;gap:8px;flex-wrap:wrap">
-                                <button class="btn btn-primary btn-sm" type="submit" name="action" value="approve"><i class="fas fa-check"></i> Approve</button>
-                                <button class="btn btn-ghost btn-sm" type="submit" name="action" value="reject"><i class="fas fa-xmark"></i> Reject</button>
+                                <button class="btn btn-primary btn-sm btn-icon" type="submit" name="action" value="approve" title="Approve" aria-label="Approve"><i class="fas fa-check"></i></button>
+                                <button class="btn btn-ghost btn-sm btn-icon" type="submit" name="action" value="reject" title="Reject" aria-label="Reject"><i class="fas fa-xmark"></i></button>
                               </div>
                             </form>
                           <?php endif; ?>
@@ -286,3 +346,7 @@ require_once __DIR__ . '/../../includes/header.php';
 </div>
 
 <?php require_once __DIR__ . '/../../includes/footer.php'; ?>
+
+
+
+

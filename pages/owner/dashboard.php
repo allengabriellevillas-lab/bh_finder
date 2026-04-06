@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 require_once __DIR__ . '/../../includes/config.php';
 requireOwner();
 
@@ -49,8 +49,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 // Subscription
 $activeSub = getActiveOwnerSubscription($uid);
+
+maybeNotifyOwnerTrialLifecycle($uid);
+$accessInfo = getOwnerAccessInfo($uid);
 $planType = strtolower((string)($activeSub['plan'] ?? ''));
-$hasPro = $activeSub && $planType === 'pro';
+$hasPro = $activeSub && in_array($planType, ['pro','trial'], true);
 
 $days = max(1, intval(getSetting('owner_subscription_days', '30') ?? '30'));
 $basicPricing = ownerSubscriptionPricing('basic');
@@ -111,6 +114,8 @@ $listingsStmt = $db->prepare("SELECT
       LIMIT 1) AS cover_image
     ,(SELECT MIN(r.price) FROM rooms r WHERE r.boarding_house_id = bh.id AND r.price > 0) AS room_price_min
     ,(SELECT MAX(r.price) FROM rooms r WHERE r.boarding_house_id = bh.id AND r.price > 0) AS room_price_max
+    ,(SELECT COUNT(*) FROM favorites f WHERE f.boarding_house_id = bh.id) AS favorites_count
+    ,(SELECT COUNT(*) FROM room_requests rr JOIN rooms r2 ON r2.id = rr.room_id WHERE r2.boarding_house_id = bh.id) AS requests_count
   FROM boarding_houses bh
   WHERE bh.owner_id = ?
   ORDER BY bh.created_at DESC");
@@ -140,6 +145,11 @@ require_once __DIR__ . '/../../includes/header.php';
       </div>
 
       <main>
+        <?php if (!isOwnerActive($uid)): ?>
+          <div class="flash flash-error" style="margin-bottom:14px"><i class="fas fa-hourglass-end"></i> Your trial has ended. <a href="<?= SITE_URL ?>/pages/owner/subscriptions.php">Subscribe to continue receiving tenants</a>.</div>
+        <?php elseif (($accessInfo['kind'] ?? '') === 'trial' && $accessInfo['days_left'] !== null): ?>
+          <div class="flash flash-warning" style="margin-bottom:14px"><i class="fas fa-hourglass-half"></i> Trial ends in <strong><?= intval($accessInfo['days_left']) ?></strong> day<?= intval($accessInfo['days_left']) === 1 ? '' : 's' ?>. <a href="<?= SITE_URL ?>/pages/owner/subscriptions.php">Subscribe now</a>.</div>
+        <?php endif; ?>
         <div class="stats-grid">
           <div class="stat-card">
             <div class="stat-icon stat-icon-primary"><i class="fas fa-building"></i></div>
@@ -301,12 +311,13 @@ require_once __DIR__ . '/../../includes/header.php';
                       </td>
                       <td>
                         <div class="flex flex-wrap gap-2">
-                          <a class="btn btn-primary btn-sm" href="<?= SITE_URL ?>/pages/detail.php?id=<?= intval($l['id'] ?? 0) ?>"><i class="fas fa-eye"></i> View</a>
-                          <a class="btn btn-ghost btn-sm" href="edit_listing.php?id=<?= intval($l['id'] ?? 0) ?>"><i class="fas fa-pen"></i> Edit</a>
+                          <a class="btn btn-primary btn-sm btn-icon" href="<?= SITE_URL ?>/pages/detail.php?id=<?= intval($l['id'] ?? 0) ?>" title="View" aria-label="View"><i class="fas fa-eye"></i></a>
+                          <a class="btn btn-ghost btn-sm btn-icon" href="edit_listing.php?id=<?= intval($l['id'] ?? 0) ?>" title="Edit" aria-label="Edit"><i class="fas fa-pen"></i></a>
+                          <a class="btn btn-ghost btn-sm btn-icon" href="boost_listing.php?bh_id=<?= intval($l['id'] ?? 0) ?>" title="Boost" aria-label="Boost"><i class="fas fa-rocket"></i></a>
                           <form method="POST" action="dashboard.php" style="display:inline" onsubmit="return confirm('Delete this listing? This cannot be undone.');">
                             <input type="hidden" name="action" value="delete">
                             <input type="hidden" name="id" value="<?= intval($l['id'] ?? 0) ?>">
-                            <button type="submit" class="btn btn-danger btn-sm"><i class="fas fa-trash"></i> Delete</button>
+                            <button type="submit" class="btn btn-danger btn-sm btn-icon" title="Delete" aria-label="Delete"><i class="fas fa-trash"></i></button>
                           </form>
                         </div>
                       </td>
@@ -316,6 +327,63 @@ require_once __DIR__ . '/../../includes/header.php';
                 </table>
               </div>
 
+
+              <?php if ($hasPro && !empty($listings)): ?>
+                <div class="card mt-4" style="box-shadow:none;border:1px solid var(--border)">
+                  <div class="card-header">
+                    <h3 style="margin:0;font-family:var(--font-display);font-size:1.05rem;font-weight:800">Performance Feedback</h3>
+                    <div class="text-muted text-sm" style="margin-top:4px">Quick tips to help you get more tenants.</div>
+                  </div>
+                  <div class="card-body">
+                    <div class="table-wrap">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>Listing</th>
+                            <th>Views</th>
+                            <th>Favorites</th>
+                            <th>Inquiries</th>
+                            <th>Tip</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <?php foreach ($listings as $l):
+                            $views = intval($l['views'] ?? 0);
+                            $fav = intval($l['favorites_count'] ?? 0);
+                            $req = intval($l['requests_count'] ?? 0);
+                            $hasImg = !empty($l['cover_image']);
+                            $avail = intval($l['available_rooms'] ?? 0);
+
+                            $tips = [];
+                            if (!$hasImg) $tips[] = 'Add photos to build trust.';
+                            if ($views < 10) $tips[] = 'Low views: try boosting your listing.';
+                            if ($avail <= 0) $tips[] = 'No availability: update rooms or capacity.';
+                            if (empty($tips)) $tips[] = 'Good job — keep responding fast to inquiries.';
+                            $tipText = $tips[0];
+                          ?>
+                            <tr>
+                              <td>
+                                <div class="font-bold"><?= sanitize($l['name'] ?? '') ?></div>
+                                <div class="text-muted text-xs"><?= sanitize($l['city'] ?? '') ?></div>
+                              </td>
+                              <td><?= number_format($views) ?></td>
+                              <td><?= number_format($fav) ?></td>
+                              <td><?= number_format($req) ?></td>
+                              <td class="text-muted"><?= sanitize($tipText) ?></td>
+                            </tr>
+                          <?php endforeach; ?>
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              <?php elseif (!$hasPro): ?>
+                <div class="card mt-4" style="box-shadow:none;border:1px solid var(--border)">
+                  <div class="card-body">
+                    <div class="text-muted">Upgrade to Pro to see performance analytics (views, favorites, inquiries) and tips.</div>
+                  </div>
+                </div>
+              <?php endif; ?>
               <div class="text-muted text-xs mt-3">
                 Status summary:
                 <span class="badge status-active"><?= $activeCount ?> Active</span>
@@ -332,3 +400,6 @@ require_once __DIR__ . '/../../includes/header.php';
 </div>
 
 <?php require_once __DIR__ . '/../../includes/footer.php'; ?>
+
+
+

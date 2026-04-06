@@ -1,15 +1,21 @@
-<?php
+﻿<?php
 require_once __DIR__ . '/../../includes/config.php';
 requireOwner();
 requireVerifiedOwner();
 
 $db = getDB();
+ensurePaymentsSubscriptionIdColumn();
 ensureSubscriptionExpiringNotifications(intval($_SESSION['user_id'] ?? 0));
+maybeNotifyOwnerTrialLifecycle(intval($_SESSION['user_id'] ?? 0));
 $me = getCurrentUser();
 $pageTitle = 'Room Management';
 
-$roomCols = null;
-try {
+$activeSub = getActiveOwnerSubscription(intval($_SESSION['user_id'] ?? 0));
+$planType = strtolower((string)($activeSub['plan'] ?? ''));
+$hasPro = $activeSub && in_array($planType, ['pro','trial'], true);
+$freeRoomsMax = max(1, intval(getSetting('free_max_rooms_per_property', '5') ?? '5'));
+
+$roomCols = null;try {
     $roomCols = $db->query("SHOW COLUMNS FROM rooms")->fetchAll() ?: [];
 } catch (Throwable $e) {
     $roomCols = [];
@@ -111,6 +117,7 @@ foreach ($boardingHouses as $b) {
 
 // Handle actions
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    requireOwnerActiveAccess();
     $action = trim((string)($_POST['action'] ?? ''));
     $bhId = intval($_POST['bh_id'] ?? $selectedBhId);
 
@@ -160,7 +167,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         }
                     }
                 }
-                if ($hasRoomAmenities || $hasRoomAccommodationType) {
+                // Free plan room cap (Pro is unlimited)
+                if (!$hasPro) {
+                    $cntStmt = $db->prepare("SELECT COUNT(*) FROM rooms WHERE boarding_house_id = ?");
+                    $cntStmt->execute([$bhId]);
+                    $existingRooms = intval($cntStmt->fetchColumn() ?: 0);
+                    if ($existingRooms >= $freeRoomsMax) {
+                        throw new RuntimeException('Free plan limit: upgrade to Pro to add more than ' . intval($freeRoomsMax) . ' rooms to a property.');
+                    }
+                }
+if ($hasRoomAmenities || $hasRoomAccommodationType) {
                     if ($hasRoomImage) {
                         $roomImageName = null;
                         if (!empty($_FILES['room_image']['name']) && is_array($_FILES['room_image'])) {
@@ -226,7 +242,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $nextRoomImage = '';
                 }
 
-                if ($hasRoomAmenities || $hasRoomAccommodationType) {
+if ($hasRoomAmenities || $hasRoomAccommodationType) {
                     if ($hasRoomImage) {
                         $set = ['room_name=?', 'price=?', 'capacity=?', 'current_occupants=?'];
                         $vals = [$roomName, $price, $capacity, $current];
@@ -346,7 +362,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             $db->beginTransaction();
 
-            $roomQ = $db->prepare("SELECT r.id, r.boarding_house_id, r.capacity, r.current_occupants, r.status
+            $roomQ = $db->prepare("SELECT r.id, r.boarding_house_id, r.capacity, r.current_occupants, r.status, r.price
               FROM rooms r
               JOIN boarding_houses bh ON bh.id = r.boarding_house_id
               WHERE r.id = ? AND bh.owner_id = ?
@@ -377,6 +393,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $updRoom = $db->prepare("UPDATE rooms SET current_occupants = ?, status = ? WHERE id = ?");
             $updRoom->execute([$cur2, $status2, $roomId]);
 
+            // Service fee (platform revenue): create a pending payment record for admin review.
+            try {
+                $pct = getServiceFeePercentage();
+                $roomPrice = (float)($room['price'] ?? 0);
+                $fee = round($roomPrice * ($pct / 100.0), 2);
+                if ($fee > 0) {
+                    $note = 'Service fee for manual assignment: room_id=' . $roomId . ', tenant_id=' . $tenantId;
+                    $insPay = $db->prepare("INSERT INTO payments (user_id, room_id, kind, amount, method, status, admin_note) VALUES (?,?,?,?,?,?,?)");
+                    $insPay->execute([
+                        intval($_SESSION['user_id'] ?? 0),
+                        $roomId,
+                        'service_fee',
+                        $fee,
+                        'simulated',
+                        'pending',
+                        $note,
+                    ]);
+                }
+            } catch (Throwable $e) {
+                // ignore
+            }
+
             $db->commit();
             syncBoardingHouseRoomStats($db, intval($room['boarding_house_id'] ?? 0));
             setFlash('success', 'Tenant assigned to the room.');
@@ -386,7 +424,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $moveInDate = $moveIn !== '' ? $moveIn : null;
 
             $db->beginTransaction();
-            $q = $db->prepare("SELECT rr.id, rr.status, rr.room_id, r.boarding_house_id, r.capacity, r.current_occupants, r.status AS room_status
+            $q = $db->prepare("SELECT rr.id, rr.status, rr.room_id, rr.tenant_id, r.boarding_house_id, r.capacity, r.current_occupants, r.status AS room_status, r.price
               FROM room_requests rr
               JOIN rooms r ON r.id = rr.room_id
               JOIN boarding_houses bh ON bh.id = r.boarding_house_id
@@ -423,25 +461,40 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $updReq->execute([$reqId]);
             }
 
+            // Service fee (platform revenue): create a pending payment record for admin review.
+            try {
+                $pct = getServiceFeePercentage();
+                $roomPrice = (float)($row['price'] ?? 0);
+                $fee = round($roomPrice * ($pct / 100.0), 2);
+                if ($fee > 0) {
+                    $note = 'Service fee for approved request #' . $reqId . ': room_id=' . $roomId . ', tenant_id=' . intval($row['tenant_id'] ?? 0);
+                    $insPay = $db->prepare("INSERT INTO payments (user_id, room_id, kind, amount, method, status, admin_note) VALUES (?,?,?,?,?,?,?)");
+                    $insPay->execute([
+                        intval($_SESSION['user_id'] ?? 0),
+                        $roomId,
+                        'service_fee',
+                        $fee,
+                        'simulated',
+                        'pending',
+                        $note,
+                    ]);
+                }
+            } catch (Throwable $e) {
+                // ignore
+            }
+
             $db->commit();
             syncBoardingHouseRoomStats($db, $bhId2);
+
             // Notification (best-effort)
             try {
-                $tenantId = 0;
-                try {
-                    $tq = $db->prepare("SELECT tenant_id FROM room_requests WHERE id = ? LIMIT 1");
-                    $tq->execute([$reqId]);
-                    $tenantId = intval($tq->fetchColumn() ?: 0);
-                } catch (Throwable $e) {
-                    $tenantId = 0;
-                }
+                $tenantId = intval($row['tenant_id'] ?? 0);
                 if ($tenantId > 0) notifyRoomRequestDecision($tenantId, $bhId2, $roomId, 'approved');
             } catch (Throwable $e) {
                 // ignore
             }
 
-            setFlash('success', 'Request approved. Tenant assigned to the room.');
-        } elseif ($action === 'reject_request') {
+            setFlash('success', 'Request approved. Tenant assigned to the room.');        } elseif ($action === 'reject_request') {
             $reqId = intval($_POST['request_id'] ?? 0);
             $upd = $db->prepare("UPDATE room_requests rr
               JOIN rooms r ON r.id = rr.room_id
@@ -670,7 +723,7 @@ require_once __DIR__ . '/../../includes/header.php';
                         <input name="room_image" type="file" accept="image/jpeg,image/png,image/webp">
                         <div class="file-upload-icon"><i class="fas fa-cloud-upload-alt"></i></div>
                         <p class="file-upload-text"><strong>Click to upload</strong> or drag & drop</p>
-                        <p class="file-upload-text" style="font-size:.76rem;margin-top:4px">JPG, PNG, or WebP ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¾Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¦ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· Max 5MB</p>
+                        <p class="file-upload-text" style="font-size:.76rem;margin-top:4px">JPG, PNG, or WebP &middot; Max 5MB</p>
                       </div>
                       <div class="file-preview room-inline-preview"></div>
                     </div>
@@ -722,7 +775,7 @@ require_once __DIR__ . '/../../includes/header.php';
                             if ($acur > $acap) $acur = $acap;
                           ?>
                           <div class="text-muted text-sm" style="margin-top:4px">
-                            Room: <strong><?= sanitize($assignRoom['room_name'] ?? '') ?></strong> ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¾Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¦ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· Occupancy: <?= $acur ?>/<?= $acap ?>
+                            Room: <strong><?= sanitize($assignRoom['room_name'] ?? '') ?></strong> &middot; Occupancy: <?= $acur ?>/<?= $acap ?>
                           </div>
                         <?php else: ?>
                           <div class="text-muted text-sm" style="margin-top:4px">That room was not found.</div>
@@ -777,7 +830,7 @@ require_once __DIR__ . '/../../includes/header.php';
                                         <input type="hidden" name="bh_id" value="<?= intval($selectedBhId) ?>">
                                         <input type="hidden" name="room_id" value="<?= intval($assignRoomId) ?>">
                                         <input type="hidden" name="tenant_id" value="<?= intval($t['id'] ?? 0) ?>">
-                                        <button class="btn btn-primary btn-sm" type="submit"><i class="fas fa-user-plus"></i> Assign</button>
+                                        <button class="btn btn-primary btn-sm btn-icon" type="submit" title="Assign" aria-label="Assign"><i class="fas fa-user-plus"></i></button>
                                       </form>
                                     </td>
                                   </tr>
@@ -1025,8 +1078,8 @@ require_once __DIR__ . '/../../includes/header.php';
                             <td class="text-muted text-sm"><?= !empty($pr['created_at']) ? sanitize(date('M d, Y', strtotime((string)$pr['created_at']))) : '' ?></td>
                             <td>
                               <div class="flex flex-wrap gap-2">
-                                <button class="btn btn-primary btn-sm" type="submit" name="action" value="approve_request"><i class="fas fa-check"></i> Approve</button>
-                                <button class="btn btn-ghost btn-sm" type="submit" name="action" value="reject_request"><i class="fas fa-xmark"></i> Reject</button>
+                                <button class="btn btn-primary btn-sm btn-icon" type="submit" name="action" value="approve_request" title="Approve" aria-label="Approve"><i class="fas fa-check"></i></button>
+                                <button class="btn btn-ghost btn-sm btn-icon" type="submit" name="action" value="reject_request" title="Reject" aria-label="Reject"><i class="fas fa-xmark"></i></button>
                               </div>
                             </td>
                           </form>
@@ -1070,7 +1123,7 @@ require_once __DIR__ . '/../../includes/header.php';
         <div class="be-subscribe-grid">
           <div class="be-subscribe-card">
             <h4 class="be-subscribe-title"><i class="fab fa-paypal"></i> Pay with PayPal</h4>
-            <p class="text-muted text-sm" style="margin-top:6px">Fastest option. YouÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ll be redirected to PayPal checkout.</p>
+            <p class="text-muted text-sm" style="margin-top:6px">Fastest option. You'll be redirected to PayPal checkout.</p>
             <form method="POST" action="paypal_start.php" style="margin-top:12px">
               <input type="hidden" name="room_id" value="<?= $mRoomId ?>">
               <input type="hidden" name="bh_id" value="<?= $mBhId ?>">
@@ -1114,6 +1167,13 @@ require_once __DIR__ . '/../../includes/header.php';
   </div>
 <?php endif; ?>
 <?php require_once __DIR__ . '/../../includes/footer.php'; ?>
+
+
+
+
+
+
+
 
 
 

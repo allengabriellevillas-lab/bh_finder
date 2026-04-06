@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 require_once __DIR__ . '/../includes/config.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
@@ -7,6 +7,7 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 }
 
 requireTenant();
+
 
 $db = getDB();
 $roomId = intval($_POST['room_id'] ?? 0);
@@ -72,7 +73,7 @@ if ($roomId <= 0) {
 }
 
 try {
-    $stmt = $db->prepare("SELECT r.*, bh.id AS bh_id
+    $stmt = $db->prepare("SELECT r.*, bh.id AS bh_id, bh.owner_id AS bh_owner_id, bh.name AS bh_name
       FROM rooms r
       JOIN boarding_houses bh ON bh.id = r.boarding_house_id
       WHERE r.id = ?");
@@ -80,25 +81,13 @@ try {
     $room = $stmt->fetch();
     if (!$room) throw new RuntimeException('Room not found.');
 
-    // Subscription enforcement (best-effort)
-    try {
-        if (function_exists('roomSubscriptionEnforced') && roomSubscriptionEnforced()) {
-            $sub = strtolower((string)($room['subscription_status'] ?? ''));
-            $end = trim((string)($room['end_date'] ?? ''));
-            $active = ($sub === 'active') && ($end === '' || strtotime($end) >= strtotime(date('Y-m-d')));
-            if (!$active) throw new RuntimeException('This room is not available right now.');
-        }
-    } catch (Throwable $e) {
-        // If columns are missing, ignore.
+    // Disallow requests when the owner has no active subscription/trial.
+    $ownerId = intval($room['bh_owner_id'] ?? 0);
+    if ($ownerId > 0 && !isOwnerActive($ownerId)) {
+        throw new RuntimeException('This room is not available right now.');
     }
 
-    $cap = max(1, intval($room['capacity'] ?? 1));
-    $cur = max(0, intval($room['current_occupants'] ?? 0));
-    if ($cur >= $cap || ($room['status'] ?? '') === 'occupied') {
-        throw new RuntimeException('This room is already full.');
-    }
-
-    // Avoid duplicate active requests
+    // Existing request short-circuit (so users see a clear status even if the room later becomes full)
     $check = $db->prepare("SELECT id, status FROM room_requests
       WHERE room_id = ? AND tenant_id = ? AND status IN ('pending','approved','occupied')
       ORDER BY created_at DESC
@@ -106,15 +95,51 @@ try {
     $check->execute([$roomId, intval($_SESSION['user_id'])]);
     $existing = $check->fetch();
 
-    $status = 'pending';
     if ($existing) {
         $status = (string)($existing['status'] ?? 'pending');
         $msg = 'You already have an active request for this room.';
         if (wantsJson()) jsonOut(['ok' => true, 'status' => $status, 'message' => $msg]);
         setFlash('success', $msg);
     } else {
+        // Subscription enforcement (best-effort)
+        try {
+            if (function_exists('roomSubscriptionEnforced') && roomSubscriptionEnforced()) {
+                $sub = strtolower((string)($room['subscription_status'] ?? ''));
+                $end = trim((string)($room['end_date'] ?? ''));
+                $active = ($sub === 'active') && ($end === '' || strtotime($end) >= strtotime(date('Y-m-d')));
+                if (!$active) throw new RuntimeException('This room is not available right now.');
+            }
+        } catch (Throwable $e) {
+            // If columns are missing, ignore.
+        }
+
+        $cap = max(1, intval($room['capacity'] ?? 1));
+        $cur = max(0, intval($room['current_occupants'] ?? 0));
+        if ($cur >= $cap || ($room['status'] ?? '') === 'occupied') {
+            throw new RuntimeException('This room is already full.');
+        }
+
         $ins = $db->prepare("INSERT INTO room_requests (room_id, tenant_id, status) VALUES (?,?, 'pending')");
         $ins->execute([$roomId, intval($_SESSION['user_id'])]);
+
+        // Notify owner (best-effort)
+        try {
+            if (notificationsEnabled()) {
+                $ownerId = intval($room['bh_owner_id'] ?? 0);
+                if ($ownerId > 0) {
+                    $bhName = trim((string)($room['bh_name'] ?? ''));
+                    $roomName = trim((string)($room['room_name'] ?? ''));
+                    $title = 'New room request';
+                    $body = ($roomName !== '' ? ('Room: ' . $roomName . '. ') : '')
+                        . ($bhName !== '' ? ('Listing: ' . $bhName . '.') : 'A tenant requested a room.');
+                    $link = SITE_URL . '/pages/owner/rooms.php#requests';
+                    createNotification($ownerId, 'room_request', $title, $body, $link);
+                }
+            }
+        } catch (Throwable $e) {
+            // ignore
+        }
+
         $msg = 'Room request sent. The owner will review it.';
         if (wantsJson()) jsonOut(['ok' => true, 'status' => 'pending', 'message' => $msg]);
         setFlash('success', $msg);
@@ -127,6 +152,7 @@ try {
 
     header('Location: ' . SITE_URL . $redirect);
     exit;
+
 } catch (Throwable $e) {
     $msg = $e->getMessage() ?: 'Unable to send request.';
     if (wantsJson()) jsonOut(['ok' => false, 'message' => $msg], 400);

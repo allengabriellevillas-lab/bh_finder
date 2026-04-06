@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 // includes/config.php - Configuration & Database Connection
 
 // Optional local secrets (not committed). Use this to set env vars like PAYPAL_CLIENT_ID, PAYPAL_SECRET, etc.
@@ -14,6 +14,10 @@ define('DB_PASS', '');
 define('DB_NAME', 'boarding_house_finder');
 
 define('SITE_NAME', 'BoardingFinder');
+
+
+// Google Identity Services (Sign in with Google)
+define('GOOGLE_CLIENT_ID', trim((string)(getenv('GOOGLE_CLIENT_ID') ?: '')));
 
 // Base URL (used for linking assets like /style.css). Prefer detecting the project folder, not the current script's directory.
 $__appRootForUrl = __DIR__;
@@ -565,11 +569,127 @@ function ownerSubscriptionsTableExists(PDO $db): bool {
     return $cache;
 }
 
+function ownerSubscriptionsColumnFlags(PDO $db): array {
+    static $cache = null;
+    if (is_array($cache)) return $cache;
+
+    $cache = [
+        'has_is_trial' => false,
+        'has_trial_start' => false,
+        'has_trial_end' => false,
+        'has_plan' => true,
+        'has_end_date' => true,
+    ];
+
+    try {
+        $cols = $db->query("SHOW COLUMNS FROM owner_subscriptions")->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        $names = array_map(fn($r) => (string)($r['Field'] ?? ''), $cols);
+        $has = fn(string $c): bool => in_array($c, $names, true);
+        $cache['has_is_trial'] = $has('is_trial');
+        $cache['has_trial_start'] = $has('trial_start');
+        $cache['has_trial_end'] = $has('trial_end');
+        $cache['has_plan'] = $has('plan');
+        $cache['has_end_date'] = $has('end_date');
+    } catch (Throwable $e) {
+        // keep defaults
+    }
+
+    return $cache;
+}
+
+function ensureOwnerSubscriptionTrialColumns(): void {
+    static $done = false;
+    if ($done) return;
+    $done = true;
+
+    try {
+        $db = getDB();
+        if (!ownerSubscriptionsTableExists($db)) return;
+
+        $cols = $db->query("SHOW COLUMNS FROM owner_subscriptions")->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        $names = array_map(fn($r) => (string)($r['Field'] ?? ''), $cols);
+        $has = fn(string $c): bool => in_array($c, $names, true);
+
+        if ($has('plan')) {
+            try {
+                $db->exec("ALTER TABLE owner_subscriptions MODIFY COLUMN plan ENUM('trial','basic','pro') NOT NULL DEFAULT 'basic'");
+            } catch (Throwable $e) {
+                // ignore
+            }
+        }
+
+        if (!$has('trial_start')) {
+            try { $db->exec("ALTER TABLE owner_subscriptions ADD COLUMN trial_start DATETIME NULL"); } catch (Throwable $e) { }
+        }
+        if (!$has('trial_end')) {
+            try { $db->exec("ALTER TABLE owner_subscriptions ADD COLUMN trial_end DATETIME NULL"); } catch (Throwable $e) { }
+            try { $db->exec("ALTER TABLE owner_subscriptions ADD INDEX idx_os_trial_end (trial_end)"); } catch (Throwable $e) { }
+        }
+        if (!$has('is_trial')) {
+            try { $db->exec("ALTER TABLE owner_subscriptions ADD COLUMN is_trial TINYINT(1) NOT NULL DEFAULT 1"); } catch (Throwable $e) { }
+            try { $db->exec("ALTER TABLE owner_subscriptions ADD INDEX idx_os_trial (is_trial)"); } catch (Throwable $e) { }
+            // Column default is 1; mark existing paid subscriptions as non-trial (best-effort)
+            try { $db->exec("UPDATE owner_subscriptions SET is_trial = 0 WHERE is_trial = 1 AND plan IN ('basic','pro')"); } catch (Throwable $e) { }
+        }
+    } catch (Throwable $e) {
+        // ignore
+    }
+}
+
+/**
+ * SQL snippet to restrict listings to owners with an active subscription OR active trial.
+ * Returns '' if owner_subscriptions isn't available yet.
+ */
+function ownerActiveSqlWhere(PDO $db, string $ownerIdExpr): string {
+    if (!ownerSubscriptionsTableExists($db)) return '';
+
+    $flags = ownerSubscriptionsColumnFlags($db);
+    if (!empty($flags['has_is_trial']) && !empty($flags['has_trial_end'])) {
+        return " AND EXISTS (\n"
+            . "  SELECT 1 FROM owner_subscriptions os\n"
+            . "  WHERE os.owner_id = $ownerIdExpr\n"
+            . "    AND os.status = 'active'\n"
+            . "    AND (\n"
+            . "      (os.is_trial = 1 AND os.trial_end IS NOT NULL AND os.trial_end >= NOW())\n"
+            . "      OR\n"
+            . "      (os.is_trial = 0 AND (os.end_date IS NULL OR os.end_date >= CURDATE()))\n"
+            . "    )\n"
+            . ")";
+    }
+
+    return " AND EXISTS (\n"
+        . "  SELECT 1 FROM owner_subscriptions os\n"
+        . "  WHERE os.owner_id = $ownerIdExpr\n"
+        . "    AND os.status = 'active'\n"
+        . "    AND (os.end_date IS NULL OR os.end_date >= CURDATE())\n"
+        . ")";
+}
+
 function getActiveOwnerSubscription(int $ownerId): ?array {
     if ($ownerId <= 0) return null;
     try {
         $db = getDB();
         if (!ownerSubscriptionsTableExists($db)) return null;
+
+        $flags = ownerSubscriptionsColumnFlags($db);
+        if (!empty($flags['has_is_trial']) && !empty($flags['has_trial_end'])) {
+            $stmt = $db->prepare("SELECT *
+              FROM owner_subscriptions
+              WHERE owner_id = ?
+                AND status = 'active'
+                AND (
+                  (is_trial = 1 AND trial_end IS NOT NULL AND trial_end >= NOW())
+                  OR
+                  (is_trial = 0 AND (end_date IS NULL OR end_date >= CURDATE()))
+                )
+              ORDER BY (CASE WHEN is_trial = 0 THEN 1 ELSE 0 END) DESC,
+                       COALESCE(trial_end, CONCAT(COALESCE(end_date,'9999-12-31'),' 23:59:59')) DESC,
+                       id DESC
+              LIMIT 1");
+            $stmt->execute([$ownerId]);
+            return $stmt->fetch() ?: null;
+        }
+
         $stmt = $db->prepare("SELECT *
           FROM owner_subscriptions
           WHERE owner_id = ?
@@ -578,13 +698,187 @@ function getActiveOwnerSubscription(int $ownerId): ?array {
           ORDER BY COALESCE(end_date, '9999-12-31') DESC, id DESC
           LIMIT 1");
         $stmt->execute([$ownerId]);
-        $row = $stmt->fetch();
-        return $row ?: null;
+        return $stmt->fetch() ?: null;
     } catch (Throwable $e) {
         return null;
     }
 }
 
+function getOwnerAccessInfo(int $ownerId): array {
+    $ownerId = intval($ownerId);
+    $out = [
+        'active' => false,
+        'kind' => 'none',
+        'plan' => null,
+        'ends_at' => null,
+        'days_left' => null,
+        'sub' => null,
+    ];
+    if ($ownerId <= 0) return $out;
+
+    $sub = getActiveOwnerSubscription($ownerId);
+    if (!$sub) return $out;
+
+    $isTrial = false;
+    if (array_key_exists('is_trial', $sub)) $isTrial = intval($sub['is_trial'] ?? 0) === 1;
+    $plan = strtolower(trim((string)($sub['plan'] ?? '')));
+    if ($plan === 'trial') $isTrial = true;
+
+    $endsAt = null;
+    try {
+        if ($isTrial && !empty($sub['trial_end'])) {
+            $endsAt = new DateTime((string)$sub['trial_end']);
+        } elseif (!empty($sub['end_date'])) {
+            $endsAt = new DateTime((string)$sub['end_date'] . ' 23:59:59');
+        }
+    } catch (Throwable $e) {
+        $endsAt = null;
+    }
+
+    $daysLeft = null;
+    if ($endsAt) {
+        try {
+            $now = new DateTime('now');
+            $diffDays = (int)$now->diff($endsAt)->format('%r%a');
+            $daysLeft = max(0, $diffDays);
+        } catch (Throwable $e) {
+            $daysLeft = null;
+        }
+    }
+
+    $out['active'] = true;
+    $out['kind'] = $isTrial ? 'trial' : 'subscription';
+    $out['plan'] = $plan !== '' ? $plan : null;
+    $out['ends_at'] = $endsAt;
+    $out['days_left'] = $daysLeft;
+    $out['sub'] = $sub;
+    return $out;
+}
+
+function isOwnerActive(int $ownerId): bool {
+    return !!(getOwnerAccessInfo($ownerId)['active'] ?? false);
+}
+
+function startOwnerTrialIfMissing(int $ownerId, int $days = 14): bool {
+    $ownerId = intval($ownerId);
+    $days = max(1, intval($days));
+    if ($ownerId <= 0) return false;
+
+    try {
+        $db = getDB();
+        if (!ownerSubscriptionsTableExists($db)) return false;
+
+        ensureOwnerSubscriptionTrialColumns();
+
+        $existing = getActiveOwnerSubscription($ownerId);
+        if ($existing) return false;
+
+        $hasTrialCols = ownerSubscriptionsColumnFlags($db);
+        if (!empty($hasTrialCols['has_is_trial'])) {
+            $chk = $db->prepare("SELECT COUNT(*) FROM owner_subscriptions WHERE owner_id = ? AND is_trial = 1");
+            $chk->execute([$ownerId]);
+            if (intval($chk->fetchColumn() ?: 0) > 0) return false;
+        }
+
+        $stmt = $db->prepare("INSERT INTO owner_subscriptions
+            (owner_id, plan, status, start_date, end_date, trial_start, trial_end, is_trial)
+            VALUES
+            (?, 'trial', 'active', CURDATE(), DATE_ADD(CURDATE(), INTERVAL ? DAY), NOW(), DATE_ADD(NOW(), INTERVAL ? DAY), 1)");
+        $stmt->execute([$ownerId, $days, $days]);
+        return true;
+    } catch (Throwable $e) {
+        return false;
+    }
+}
+
+function expireOwnerTrialIfNeeded(int $ownerId): bool {
+    $ownerId = intval($ownerId);
+    if ($ownerId <= 0) return false;
+
+    try {
+        $db = getDB();
+        if (!ownerSubscriptionsTableExists($db)) return false;
+
+        $flags = ownerSubscriptionsColumnFlags($db);
+        if (empty($flags['has_is_trial']) || empty($flags['has_trial_end'])) return false;
+
+        $upd = $db->prepare("UPDATE owner_subscriptions
+          SET status = 'expired'
+          WHERE owner_id = ? AND status = 'active' AND is_trial = 1 AND trial_end IS NOT NULL AND trial_end < NOW()");
+        $upd->execute([$ownerId]);
+        return intval($upd->rowCount()) > 0;
+    } catch (Throwable $e) {
+        return false;
+    }
+}
+
+function maybeNotifyOwnerTrialLifecycle(int $ownerId): void {
+    $ownerId = intval($ownerId);
+    if ($ownerId <= 0) return;
+    if (!notificationsEnabled()) return;
+
+    $didExpire = false;
+    try { $didExpire = expireOwnerTrialIfNeeded($ownerId); } catch (Throwable $e) { $didExpire = false; }
+
+    $info = getOwnerAccessInfo($ownerId);
+    if (($info['kind'] ?? 'none') === 'trial' && !empty($info['ends_at']) && $info['ends_at'] instanceof DateTime) {
+        $daysLeft = $info['days_left'];
+        if ($daysLeft === 3 || $daysLeft === 1) {
+            $type = $daysLeft === 3 ? 'trial_expiring_3d' : 'trial_expiring_1d';
+            $title = 'Your trial is ending soon';
+            $body = "Your trial ends in {$daysLeft} day" . ($daysLeft === 1 ? '' : 's') . '. Subscribe to keep receiving tenants.';
+            $link = SITE_URL . '/pages/owner/subscriptions.php';
+
+            try {
+                $db = getDB();
+                $chk = $db->prepare("SELECT COUNT(*) FROM notifications
+                  WHERE user_id = ? AND type = ? AND created_at >= DATE_SUB(NOW(), INTERVAL 20 HOUR)");
+                $chk->execute([$ownerId, $type]);
+                if (intval($chk->fetchColumn() ?: 0) === 0) {
+                    createNotification($ownerId, $type, $title, $body, $link);
+                }
+            } catch (Throwable $e) {
+                // ignore
+            }
+        }
+        return;
+    }
+
+    if ($didExpire) {
+        try {
+            $db = getDB();
+            $type = 'trial_expired';
+            $chk = $db->prepare("SELECT COUNT(*) FROM notifications
+              WHERE user_id = ? AND type = ? AND created_at >= DATE_SUB(NOW(), INTERVAL 36 HOUR)");
+            $chk->execute([$ownerId, $type]);
+            if (intval($chk->fetchColumn() ?: 0) === 0) {
+                createNotification(
+                    $ownerId,
+                    $type,
+                    'Your trial has ended',
+                    'Your trial has ended. Subscribe to continue receiving tenants.',
+                    SITE_URL . '/pages/owner/subscriptions.php'
+                );
+            }
+        } catch (Throwable $e) {
+            // ignore
+        }
+    }
+}
+
+function requireOwnerActiveAccess(?string $redirectPath = null): void {
+    requireOwner();
+    $uid = intval($_SESSION['user_id'] ?? 0);
+
+    try { maybeNotifyOwnerTrialLifecycle($uid); } catch (Throwable $e) {}
+
+    if (!isOwnerActive($uid)) {
+        setFlash('error', 'Your trial has ended. Subscribe to continue receiving tenants.');
+        $redirectPath = $redirectPath ?: '/pages/owner/subscriptions.php';
+        header('Location: ' . SITE_URL . $redirectPath);
+        exit;
+    }
+}
 // Intro pricing settings
 function ownerIntroPricingActive(): bool {
     $enabled = trim((string)(getSetting('intro_price_enabled', '1') ?? '1'));
@@ -652,13 +946,17 @@ function ensureFeaturedListingColumns(): void {
             $db->exec("ALTER TABLE boarding_houses ADD COLUMN featured_until DATETIME NULL");
             try { $db->exec("ALTER TABLE boarding_houses ADD INDEX idx_bh_featured_until (featured_until)"); } catch (Throwable $e) { }
         }
+        if (!$has('boost_until')) {
+            $db->exec("ALTER TABLE boarding_houses ADD COLUMN boost_until DATETIME NULL");
+            try { $db->exec("ALTER TABLE boarding_houses ADD INDEX idx_bh_boost_until (boost_until)"); } catch (Throwable $e) { }
+        }
     } catch (Throwable $e) {
         // ignore
     }
 }
 function ownerSubscriptionMaxProperties(string $plan): ?int {
     $plan = strtolower(trim($plan));
-    if ($plan === 'pro') return null;
+    if (in_array($plan, ['pro','trial'], true)) return null;
     $raw = getSetting('owner_subscription_basic_max_properties', '1');
     return max(1, intval($raw ?? '2'));
 }
@@ -666,10 +964,17 @@ function ownerSubscriptionMaxProperties(string $plan): ?int {
 function ownerHasPropertyCapacity(int $ownerId, ?array $activeSub = null): bool {
     $ownerId = intval($ownerId);
     if ($ownerId <= 0) return false;
-    $activeSub = $activeSub ?: getActiveOwnerSubscription($ownerId);
-    if (!$activeSub) return false;
 
-    $max = ownerSubscriptionMaxProperties((string)($activeSub['plan'] ?? 'basic'));
+    // Trial/subscription controls listing access; capacity defaults to basic when unknown.
+    $activeSub = $activeSub ?: getActiveOwnerSubscription($ownerId);
+
+    $plan = 'basic';
+    if ($activeSub) {
+        $p = strtolower(trim((string)($activeSub['plan'] ?? 'basic')));
+        if ($p === 'trial') { $plan = 'pro'; } elseif (in_array($p, ['basic','pro'], true)) { $plan = $p; }
+    }
+
+    $max = ownerSubscriptionMaxProperties($plan);
     if ($max === null) return true;
 
     try {
@@ -683,35 +988,72 @@ function ownerHasPropertyCapacity(int $ownerId, ?array $activeSub = null): bool 
     }
 }
 
+
 function syncOwnerPropertiesToSubscription(int $ownerId, array $sub): void {
+    // Subscriptions should not control listing visibility anymore.
+    // Best-effort: keep subscription_id linkage and ensure verified owners stay active.
     $ownerId = intval($ownerId);
     if ($ownerId <= 0) return;
+
     $subId = intval($sub['id'] ?? 0);
-    $end = trim((string)($sub['end_date'] ?? ''));
-    if ($subId <= 0 || $end === '') return;
 
     try {
         $db = getDB();
-        $stmt = $db->prepare("UPDATE boarding_houses
-          SET is_active = 1, expires_at = ?, subscription_id = ?
-          WHERE owner_id = ?");
-        $stmt->execute([$end . ' 23:59:59', $subId, $ownerId]);
+
+        // Link properties to the latest subscription record (best-effort).
+        try {
+            $db->prepare("UPDATE boarding_houses SET subscription_id = ? WHERE owner_id = ?")
+              ->execute([$subId > 0 ? $subId : null, $ownerId]);
+        } catch (Throwable $e) {
+            // ignore
+        }
+
+        // If the owner is verified, keep listings active by default.
+        $u = $db->prepare("SELECT owner_verification_status, owner_verified FROM users WHERE id = ? LIMIT 1");
+        $u->execute([$ownerId]);
+        $row = $u->fetch() ?: [];
+        $verified = false;
+        if (array_key_exists('owner_verification_status', $row)) {
+            $verified = strtolower((string)($row['owner_verification_status'] ?? '')) === 'verified';
+        }
+        if (!$verified && array_key_exists('owner_verified', $row)) {
+            $verified = intval($row['owner_verified'] ?? 0) === 1;
+        }
+
+        if ($verified) {
+            try {
+                $db->prepare("UPDATE boarding_houses SET is_active = 1, expires_at = NULL WHERE owner_id = ?")
+                  ->execute([$ownerId]);
+            } catch (Throwable $e) {
+                // ignore
+            }
+        }
     } catch (Throwable $e) {
         // ignore
     }
 }
 
+
 function requireActiveOwnerSubscriptionForListingCreate(): void {
+    // Backwards-compatible function name.
+    // Trial or active subscription is required to create/edit listings.
     requireOwner();
+
     $uid = intval($_SESSION['user_id'] ?? 0);
-    $sub = getActiveOwnerSubscription($uid);
-    if (!$sub) {
-        setFlash('error', 'Subscription required: please choose a plan before adding a property.');
+
+    // Best-effort: expire trial + send countdown notifications.
+    try { maybeNotifyOwnerTrialLifecycle($uid); } catch (Throwable $e) {}
+
+    if (!isOwnerActive($uid)) {
+        setFlash('error', 'Your trial has ended. Subscribe to continue receiving tenants.');
         header('Location: ' . SITE_URL . '/pages/owner/subscriptions.php');
         exit;
     }
+
+    $sub = getActiveOwnerSubscription($uid);
+
     if (!ownerHasPropertyCapacity($uid, $sub)) {
-        setFlash('error', 'Your current plan has reached its property limit. Upgrade to Pro to add more properties.');
+        setFlash('error', 'You have reached your property limit. Upgrade to Pro to add more properties.');
         header('Location: ' . SITE_URL . '/pages/owner/subscriptions.php');
         exit;
     }
@@ -815,7 +1157,23 @@ function ensurePaymentsSubscriptionIdColumn(): void {
 
         // Other columns that older DBs may miss
         if (!$has('kind')) {
-            $db->exec("ALTER TABLE payments ADD COLUMN kind ENUM('room_subscription','owner_subscription') NOT NULL DEFAULT 'owner_subscription'");
+            $db->exec("ALTER TABLE payments ADD COLUMN kind ENUM('room_subscription','owner_subscription','service_fee','listing_boost') NOT NULL DEFAULT 'owner_subscription'");
+        }
+
+        // Ensure kind enum includes newer revenue types (best-effort)
+        try {
+            $db->exec("ALTER TABLE payments MODIFY COLUMN kind ENUM('room_subscription','owner_subscription','service_fee','listing_boost') NOT NULL DEFAULT 'owner_subscription'");
+        } catch (Throwable $e) {
+            // ignore
+        }
+
+        if (!$has('listing_id')) {
+            $db->exec("ALTER TABLE payments ADD COLUMN listing_id INT UNSIGNED NULL");
+            try { $db->exec("ALTER TABLE payments ADD INDEX idx_pay_listing (listing_id)"); } catch (Throwable $e) { }
+        }
+        if (!$has('item_key')) {
+            $db->exec("ALTER TABLE payments ADD COLUMN item_key VARCHAR(40) NULL");
+            try { $db->exec("ALTER TABLE payments ADD INDEX idx_pay_item_key (item_key)"); } catch (Throwable $e) { }
         }
         if (!$has('plan')) {
             $db->exec("ALTER TABLE payments ADD COLUMN plan ENUM('basic','pro') NULL");
@@ -1056,3 +1414,9 @@ function ensureBoardingHouseDailyViewsTable(): void {
         // ignore
     }
 }
+
+
+
+
+
+

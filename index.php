@@ -1,9 +1,14 @@
-<?php
+﻿<?php
 require_once __DIR__ . '/includes/config.php';
 
 $pageTitle = 'Find Your Boarding House';
 
-// ── Search & Filter Params ──
+// Service fee is applied to room prices when showing ranges
+$serviceFeePct = getServiceFeePercentage();
+$serviceFeeMult = 1 + ($serviceFeePct / 100.0);
+$serviceFeeMultSql = number_format($serviceFeeMult, 6, '.', '');
+
+// -- Search & Filter Params --
 $search   = trim($_GET['search'] ?? '');
 $city     = trim($_GET['city'] ?? '');
 $minPrice = intval($_GET['min_price'] ?? 0);
@@ -15,7 +20,7 @@ $page     = max(1, intval($_GET['page'] ?? 1));
 $perPage  = 9;
 $offset   = ($page - 1) * $perPage;
 
-// ── Build Query ──
+// -- Build Query --
 $db = getDB();
 ensureFeaturedListingColumns();
 
@@ -65,18 +70,17 @@ if ($enforceRoomSub && $hasRoomSubscription) {
 }
 
 $roomPriceJoin = "LEFT JOIN (\n"
-    . "  SELECT boarding_house_id, MIN(price) AS room_price_min, MAX(price) AS room_price_max\n"
+    . "  SELECT boarding_house_id, MIN(price * $serviceFeeMultSql) AS room_price_min, MAX(price * $serviceFeeMultSql) AS room_price_max\n"
     . "  FROM rooms\n"
     . "  WHERE $roomPriceExtraWhere\n"
     . "  GROUP BY boarding_house_id\n"
     . ") rp ON rp.boarding_house_id = bh.id";
 
-$priceMinExpr = "COALESCE(rp.room_price_min, bh.price_min)";
-$priceMaxExpr = "COALESCE(rp.room_price_max, COALESCE(bh.price_max, bh.price_min))";
+$priceMinExpr = "COALESCE(rp.room_price_min, (bh.price_min * $serviceFeeMultSql))";
+$priceMaxExpr = "COALESCE(rp.room_price_max, (COALESCE(bh.price_max, bh.price_min) * $serviceFeeMultSql))";
 
 $conditions = ["bh.status != 'inactive'"];
 if ($hasIsActive) $conditions[] = "bh.is_active = 1";
-if ($hasExpiresAt) $conditions[] = "(bh.expires_at IS NULL OR bh.expires_at >= NOW())";
 if ($hasApprovalStatus) $conditions[] = "bh.approval_status = 'approved'";
 $params = [];
 
@@ -107,6 +111,9 @@ if ($amenityId > 0) {
 
 $whereClause = 'WHERE ' . implode(' AND ', $conditions);
 
+// Only show listings from owners with an active subscription or trial
+$whereClause .= ownerActiveSqlWhere($db, 'bh.owner_id');
+
 $countStmt = $db->prepare("SELECT COUNT(*) FROM boarding_houses bh\r\n             $roomPriceJoin $whereClause");
 $countStmt->execute($params);
 $totalCount = intval($countStmt->fetchColumn() ?: 0);
@@ -135,7 +142,7 @@ try {
                 GROUP BY boarding_house_id
             ) rev ON rev.boarding_house_id = bh.id
             $whereClause
-            ORDER BY (CASE WHEN bh.is_featured = 1 AND (bh.featured_until IS NULL OR bh.featured_until >= NOW()) THEN 1 ELSE 0 END) DESC, bh.created_at DESC
+            ORDER BY (CASE WHEN bh.is_featured = 1 AND ((bh.featured_until IS NULL OR bh.featured_until >= NOW()) OR (bh.boost_until IS NULL OR bh.boost_until >= NOW())) THEN 1 ELSE 0 END) DESC, (CASE WHEN owner_plan_type = 'pro' THEN 1 ELSE 0 END) DESC, bh.created_at DESC
             LIMIT $perPage OFFSET $offset
         ");
         $listingsStmt->execute($params);
@@ -153,7 +160,7 @@ try {
             $roomPriceJoin
             JOIN users u ON u.id = bh.owner_id
             $whereClause
-            ORDER BY (CASE WHEN bh.is_featured = 1 AND (bh.featured_until IS NULL OR bh.featured_until >= NOW()) THEN 1 ELSE 0 END) DESC, bh.created_at DESC
+            ORDER BY (CASE WHEN bh.is_featured = 1 AND ((bh.featured_until IS NULL OR bh.featured_until >= NOW()) OR (bh.boost_until IS NULL OR bh.boost_until >= NOW())) THEN 1 ELSE 0 END) DESC, (CASE WHEN owner_plan_type = 'pro' THEN 1 ELSE 0 END) DESC, bh.created_at DESC
             LIMIT $perPage OFFSET $offset
         ");
         $listingsStmt->execute($params);
@@ -299,12 +306,12 @@ require_once __DIR__ . '/includes/header.php';
         <input type="hidden" name="type" value="<?= sanitize($type) ?>">
 
         <div class="filter-group">
-          <label class="filter-label" for="minPrice">Min Price (₱)</label>
+          <label class="filter-label" for="minPrice">Min Price (&#8369;)</label>
           <input class="form-control" id="minPrice" name="min_price" type="number" min="0" step="1" value="<?= sanitize($minPrice ?: '') ?>" placeholder="0">
         </div>
 
         <div class="filter-group">
-          <label class="filter-label" for="maxPrice">Max Price (₱)</label>
+          <label class="filter-label" for="maxPrice">Max Price (&#8369;)</label>
           <input class="form-control" id="maxPrice" name="max_price" type="number" min="0" step="1" value="<?= sanitize($maxPrice ?: '') ?>" placeholder="Any">
         </div>
 
@@ -382,7 +389,7 @@ require_once __DIR__ . '/includes/header.php';
 <?php endif; ?>
 
 <?php if ($isPremiumOwner): ?>
-  <span class="property-badge" style="left:12px;top:<?= $badgeTop ?>px;background:rgba(58,123,255,0.12);color:var(--primary);border:1px solid rgba(58,123,255,0.25)"><i class="fas fa-crown"></i> Premium Owner</span>
+  <span class="property-badge badge-premium-owner" style="left:12px;top:<?= $badgeTop ?>px"><i class="fas fa-crown"></i> Premium Owner</span>
 <?php endif; ?>
 
               <?php if (isLoggedIn()): ?>
@@ -417,19 +424,19 @@ require_once __DIR__ . '/includes/header.php';
               <div class="property-location"><i class="fas fa-map-marker-alt"></i><?= sanitize($fullLocation) ?></div>
               <div class="rating-summary">
                 <i class="fas fa-star"></i>
-                <span><?= $cnt > 0 ? sanitize(number_format($avg, 1)) : '—' ?></span>
+                <span><?= $cnt > 0 ? sanitize(number_format($avg, 1)) : '&mdash;' ?></span>
                 <small>(<?= number_format($cnt) ?>)</small>
               </div>
               <?php
-                $pMin = $l['room_price_min'] !== null ? (float)$l['room_price_min'] : (float)($l['price_min'] ?? 0);
-                $pMaxRaw = $l['room_price_max'] !== null ? (float)$l['room_price_max'] : (!empty($l['price_max']) ? (float)$l['price_max'] : null);
+                $pMin = $l['room_price_min'] !== null ? (float)$l['room_price_min'] : ((float)($l['price_min'] ?? 0) * $serviceFeeMult);
+                $pMaxRaw = $l['room_price_max'] !== null ? (float)$l['room_price_max'] : (!empty($l['price_max']) ? ((float)$l['price_max'] * $serviceFeeMult) : null);
                 $pMax = ($pMaxRaw !== null && $pMaxRaw > $pMin) ? $pMaxRaw : null;
               ?>
               <div class="property-price">
                 <?php if ($pMin > 0): ?>
-                  <?= formatPrice($pMin) ?><?php if ($pMax !== null): ?> – <?= formatPrice($pMax) ?><?php endif; ?> <small>/month</small>
+                  <?= formatPrice($pMin) ?><?php if ($pMax !== null): ?> &ndash; <?= formatPrice($pMax) ?><?php endif; ?> <small>/month</small>
                 <?php else: ?>
-                  —
+                  &mdash;
                 <?php endif; ?>
               </div>
 
@@ -462,14 +469,14 @@ require_once __DIR__ . '/includes/header.php';
               $end = min($totalPages, $page + 2);
               if ($start > 1) {
                 echo '<a class="page-btn" href="' . buildQS(['page' => 1]) . '#listings">1</a>';
-                if ($start > 2) echo '<span class="page-btn disabled">…</span>';
+                if ($start > 2) echo '<span class="page-btn disabled">...</span>';
               }
               for ($i = $start; $i <= $end; $i++) {
                 $cls = $i === $page ? 'page-btn active' : 'page-btn';
                 echo '<a class="' . $cls . '" href="' . buildQS(['page' => $i]) . '#listings">' . $i . '</a>';
               }
               if ($end < $totalPages) {
-                if ($end < $totalPages - 1) echo '<span class="page-btn disabled">…</span>';
+                if ($end < $totalPages - 1) echo '<span class="page-btn disabled">...</span>';
                 echo '<a class="page-btn" href="' . buildQS(['page' => $totalPages]) . '#listings">' . $totalPages . '</a>';
               }
             ?>
@@ -483,6 +490,8 @@ require_once __DIR__ . '/includes/header.php';
 </div>
 
 <?php require_once __DIR__ . '/includes/footer.php'; ?>
+
+
 
 
 
