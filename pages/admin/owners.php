@@ -56,13 +56,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($hasOwnerVerified || $hasOwnerVSta
             adminLog($db, 'owner_verified', 'users', $id);
             // Auto-start owner trial after approval (best-effort)
             $trialStarted = false;
-            try { $trialStarted = startOwnerTrialIfMissing($id, 14); } catch (Throwable $e) { $trialStarted = false; }
+            try { $trialStarted = startOwnerTrialIfMissing($id, 5); } catch (Throwable $e) { $trialStarted = false; }
 
             // Notification (best-effort)
             try {
                 if (notificationsEnabled()) {
                     $body = $trialStarted
-                        ? 'Your owner verification has been approved. Your 14-day trial is now active.'
+                        ? 'Your owner verification has been approved. Your 5-day trial is now active.'
                         : 'Your owner verification has been approved.';
                     createNotification(
                         $id,
@@ -287,6 +287,7 @@ require_once __DIR__ . '/../../includes/header.php';
 </div>
 
 <?php require_once __DIR__ . '/../../includes/footer.php'; ?>
+
 
 
 

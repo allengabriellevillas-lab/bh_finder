@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 require_once __DIR__ . '/../../includes/config.php';
 requireOwner();
 requireVerifiedOwner();
@@ -46,7 +46,7 @@ try {
 
         $note = 'PayPal captured: ' . $captureId;
         $db->prepare("UPDATE payments
-            SET paypal_capture_id = ?, admin_note = ?, status = 'approved', reviewed_at = NOW()
+            SET paypal_capture_id = ?, admin_note = CONCAT(COALESCE(admin_note,''), CASE WHEN admin_note IS NULL OR admin_note = '' THEN '' ELSE '\n' END, ?), status = 'approved', reviewed_at = NOW()
             WHERE id = ?")
           ->execute([$captureId, $note, $paymentId]);
     }
@@ -96,7 +96,7 @@ try {
     try {
         $uid = intval($_SESSION['user_id'] ?? 0);
         $note = 'PayPal payment failed: ' . $e->getMessage();
-        $db->prepare("UPDATE payments SET status='rejected', admin_note=? WHERE user_id=? AND kind='owner_subscription' AND method='paypal' AND paypal_order_id=? AND status='pending'")
+        $db->prepare("UPDATE payments SET status='rejected', admin_note = CONCAT(COALESCE(admin_note,''), CASE WHEN admin_note IS NULL OR admin_note = '' THEN '' ELSE '\n' END, ?) WHERE user_id=? AND kind='owner_subscription' AND method='paypal' AND paypal_order_id=? AND status='pending'")
           ->execute([$note, $uid, $orderId]);
     } catch (Throwable $e2) {
         // ignore
@@ -107,4 +107,5 @@ try {
 
 header('Location: ' . SITE_URL . '/pages/owner/subscriptions.php');
 exit;
+
 

@@ -303,55 +303,7 @@ if ($hasRoomAmenities || $hasRoomAccommodationType) {
             setFlash('success', 'Room deleted.');
             syncBoardingHouseRoomStats($db, $bhId);
         } elseif ($action === 'pay_subscription') {
-            if (!$hasRoomSubscription) {
-                throw new RuntimeException('Subscriptions are not available yet. Please run install.php or import the updated schema.sql.');
-            }
-
-            $roomId = intval($_POST['room_id'] ?? 0);
-            if ($roomId <= 0) throw new RuntimeException('Invalid room.');
-
-            $q = $db->prepare("SELECT r.id, r.boarding_house_id
-              FROM rooms r
-              JOIN boarding_houses bh ON bh.id = r.boarding_house_id
-              WHERE r.id = ? AND bh.owner_id = ?
-              LIMIT 1");
-            $q->execute([$roomId, intval($_SESSION['user_id'])]);
-            $room = $q->fetch();
-            if (!$room) throw new RuntimeException('Room not found.');
-
-            $proofPath = null;
-
-            {
-                $file = $_FILES['payment_proof'] ?? null;
-                if (!is_array($file) || empty($file['name'])) {
-                    throw new RuntimeException('Please upload a receipt screenshot, or use PayPal Sandbox checkout.');
-                }
-                $uploaded = uploadImage($file, 'pay_room_' . $roomId);
-                if ($uploaded === false) {
-                    throw new RuntimeException('Proof upload failed. Please use JPG, PNG, or WebP under 5MB.');
-                }
-                $proofPath = $uploaded;
-            }
-
-            try {
-                $ins = $db->prepare("INSERT INTO payments (user_id, room_id, amount, method, proof_path, status)
-                  VALUES (?,?,?,?,?, 'pending')");
-                $ins->execute([
-                    intval($_SESSION['user_id']),
-                    $roomId,
-                    (float)$subscriptionAmount,
-                    'proof_upload',
-                    $proofPath,
-                ]);
-
-                $db->prepare("UPDATE rooms SET subscription_status = 'pending' WHERE id = ?")
-                   ->execute([$roomId]);
-
-                setFlash('success', 'Payment submitted. Waiting for admin approval.');
-            } catch (Throwable $e) {
-                if ($proofPath) deleteUploadedFile($proofPath);
-                throw $e;
-            }
+            throw new RuntimeException('Receipt upload is disabled. Please use PayPal checkout.');
         } elseif ($action === 'assign_tenant') {
             $roomId = intval($_POST['room_id'] ?? 0);
             $tenantId = intval($_POST['tenant_id'] ?? 0);
@@ -666,15 +618,7 @@ require_once __DIR__ . '/../../includes/header.php';
                 <div class="text-muted text-sm" style="margin-top:4px">Select a boarding house to manage rooms and assign tenants.</div>
               </div>
 
-              <form method="GET" action="rooms.php" class="flex items-center gap-2">
-                <label class="text-sm text-muted">Boarding house</label>
-                <select name="bh_id" class="form-control" style="min-width:260px" onchange="this.form.submit()">
-                  <option value="0" <?= $selectedBhId === 0 ? 'selected' : '' ?>>All listings (requests only)</option>
-                  <?php foreach ($boardingHouses as $b): ?>
-                    <option value="<?= intval($b['id']) ?>" <?= intval($b['id']) === $selectedBhId ? 'selected' : '' ?>><?= sanitize($b['name'] ?? '') ?></option>
-                  <?php endforeach; ?>
-                </select>
-              </form>
+         
             </div>
 
             <div class="card-body">
@@ -992,17 +936,7 @@ require_once __DIR__ . '/../../includes/header.php';
                                   <div class="room-subscription-panel">
   <div class="text-muted text-xs room-subscription-price">Per-room subscription: <?= formatPrice((float)$subscriptionAmount) ?> / <?= intval($subscriptionDays) ?> days</div>
   <?php if ($sub !== 'active'): ?>
-    <div class="room-subscription-upload">
-      <div class="file-upload file-upload-compact">
-        <input name="payment_proof" type="file" accept="image/jpeg,image/png,image/webp">
-        <div class="file-upload-icon"><i class="fas fa-receipt"></i></div>
-        <p class="file-upload-text"><strong>Upload receipt</strong></p>
-        <p class="file-upload-text" style="font-size:.74rem;margin-top:4px">JPG, PNG, or WebP</p>
-      </div>
-      <div class="file-preview room-inline-preview"></div>
-    </div>
     <div class="room-subscription-actions">
-      <button class="btn btn-ghost btn-sm" type="submit" name="action" value="pay_subscription" formnovalidate><i class="fas fa-file-upload"></i> Submit Receipt</button>
       <button class="btn btn-primary btn-sm" type="submit" formaction="paypal_start.php" formmethod="post" formnovalidate <?= paypalEnabled() ? "" : "disabled" ?> title="<?= paypalEnabled() ? "Pay with PayPal Sandbox" : "Set PAYPAL_CLIENT_ID and PAYPAL_SECRET to enable PayPal" ?>"><i class="fab fa-paypal"></i> Pay with PayPal (Sandbox)</button>
     </div>
   <?php else: ?>
@@ -1132,32 +1066,7 @@ require_once __DIR__ . '/../../includes/header.php';
               </button>
             </form>
           </div>
-
-          <div class="be-subscribe-card">
-            <h4 class="be-subscribe-title"><i class="fas fa-receipt"></i> Upload receipt</h4>
-            <p class="text-muted text-sm" style="margin-top:6px">If you paid outside PayPal, upload a receipt screenshot for admin approval.</p>
-
-            <form method="POST" action="rooms.php?bh_id=<?= $mBhId ?>#rooms" enctype="multipart/form-data" style="margin-top:12px">
-              <input type="hidden" name="action" value="pay_subscription">
-              <input type="hidden" name="bh_id" value="<?= $mBhId ?>">
-              <input type="hidden" name="room_id" value="<?= $mRoomId ?>">
-
-              <div class="room-subscription-upload">
-                <div class="file-upload file-upload-compact">
-                  <input name="payment_proof" type="file" accept="image/jpeg,image/png,image/webp" required>
-                  <div class="file-upload-icon"><i class="fas fa-receipt"></i></div>
-                  <p class="file-upload-text"><strong>Upload receipt</strong></p>
-                  <p class="file-upload-text" style="font-size:.74rem;margin-top:4px">JPG, PNG, or WebP</p>
-                </div>
-                <div class="file-preview"></div>
-              </div>
-
-              <button class="btn btn-ghost" type="submit" style="margin-top:10px">
-                <i class="fas fa-file-upload"></i> Submit Receipt
-              </button>
-            </form>
-          </div>
-        </div>
+</div>
       </div>
 
       <div class="be-modal__footer">
@@ -1167,6 +1076,8 @@ require_once __DIR__ . '/../../includes/header.php';
   </div>
 <?php endif; ?>
 <?php require_once __DIR__ . '/../../includes/footer.php'; ?>
+
+
 
 
 

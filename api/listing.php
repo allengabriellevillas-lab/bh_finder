@@ -7,6 +7,9 @@ $id = intval($_GET['id'] ?? 0);
 if ($id <= 0) jsonResponse(['error' => 'Missing id'], 400);
 
 $db = getDB();
+// Service fee is applied to room prices when showing ranges
+$serviceFeePct = getServiceFeePercentage();
+$serviceFeeMult = 1 + ($serviceFeePct / 100.0);
 
 $bhCols = $db->query("SHOW COLUMNS FROM boarding_houses")->fetchAll() ?: [];
 $bhFields = array_map(fn($r) => (string)($r['Field'] ?? ''), $bhCols);
@@ -100,6 +103,11 @@ $location = trim((string)($bh['location'] ?? ($bh['address'] ?? '')));
 $city = trim((string)($bh['city'] ?? ''));
 $fullLocation = trim($location . (($location !== '' && $city !== '') ? ', ' : '') . $city);
 
+$outPriceMin = $computedPriceMin * $serviceFeeMult;
+$outPriceMax = $computedPriceMax !== null ? ((float)$computedPriceMax * $serviceFeeMult) : null;
+if ($outPriceMax !== null && (float)$outPriceMax <= $outPriceMin) $outPriceMax = null;
+
+
 $data = [
     'id' => intval($bh['id'] ?? 0),
     'name' => (string)($bh['name'] ?? ''),
@@ -108,8 +116,8 @@ $data = [
     'full_location' => $fullLocation,
     'description' => (string)($bh['description'] ?? ''),
     'rules' => (string)($bh['rules'] ?? ''),
-    'price_min' => $computedPriceMin,
-    'price_max' => $computedPriceMax,
+    'price_min' => $outPriceMin,
+    'price_max' => $outPriceMax,
     'accommodation_type' => (string)($bh['accommodation_type'] ?? ''),
     'total_rooms' => intval($bh['total_rooms'] ?? 0),
     'available_rooms' => intval($bh['available_rooms'] ?? 0),
@@ -132,6 +140,8 @@ $data = [
 ];
 
 jsonResponse(['data' => $data]);
+
+
 
 
 

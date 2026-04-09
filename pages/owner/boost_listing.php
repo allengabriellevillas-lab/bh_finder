@@ -146,11 +146,12 @@ require_once __DIR__ . '/../../includes/header.php';
 
               <div class="form-group">
                 <label class="form-label">Proof of Payment (JPG/PNG/WebP, max 5MB) <span class="required">*</span></label>
-                <div class="be-file <?= isset($errors['proof']) ? 'is-error' : '' ?>">
-                  <input id="boostProof" type="file" name="proof" accept="image/*" class="sr-only be-file-input" required>
-                  <label class="be-file-btn" for="boostProof"><i class="fas fa-upload"></i> Choose file</label>
-                  <span class="be-file-name" aria-live="polite"></span>
-                </div>
+                <div class="file-upload file-upload-compact <?= isset($errors['proof']) ? 'is-error' : '' ?>" aria-label="Upload proof of payment">
+  <input id="boostProof" type="file" name="proof" accept="image/*" required>
+  <div class="file-upload-icon"><i class="fas fa-cloud-upload-alt"></i></div>
+  <p class="file-upload-text"><strong>Click to upload</strong> or drag & drop</p>
+  <p class="file-upload-text file-upload-name" style="font-size:.76rem;margin-top:4px"></p>
+</div>
                 <?php if (isset($errors['proof'])): ?><p class="form-error"><i class="fas fa-exclamation-circle"></i><?= sanitize($errors['proof']) ?></p><?php endif; ?>
                 <?php if (isset($errors['amount'])): ?><p class="form-error"><i class="fas fa-exclamation-circle"></i><?= sanitize($errors['amount']) ?></p><?php endif; ?>
               </div>
@@ -169,3 +170,4 @@ require_once __DIR__ . '/../../includes/header.php';
 </div>
 
 <?php require_once __DIR__ . '/../../includes/footer.php'; ?>
+

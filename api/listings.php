@@ -11,6 +11,10 @@ $offset = max(0, intval($_GET['offset'] ?? 0));
 
 $db = getDB();
 ensureFeaturedListingColumns();
+// Service fee is applied to room prices when showing ranges
+$serviceFeePct = getServiceFeePercentage();
+$serviceFeeMult = 1 + ($serviceFeePct / 100.0);
+$serviceFeeMultSql = number_format($serviceFeeMult, 6, '.', '');
 
 $bhCols = $db->query("SHOW COLUMNS FROM boarding_houses")->fetchAll() ?: [];
 $bhFields = array_map(fn($r) => (string)($r['Field'] ?? ''), $bhCols);
@@ -36,7 +40,7 @@ if ($enforceRoomSub && $hasRoomSubscription) {
 }
 
 $roomPriceJoin = "LEFT JOIN (\n"
-    . "  SELECT boarding_house_id, MIN(price) AS room_price_min, MAX(price) AS room_price_max\n"
+    . "  SELECT boarding_house_id, MIN(price * $serviceFeeMultSql) AS room_price_min, MAX(price * $serviceFeeMultSql) AS room_price_max\n"
     . "  FROM rooms\n"
     . "  WHERE $roomPriceExtraWhere\n"
     . "  GROUP BY boarding_house_id\n"
@@ -87,8 +91,8 @@ $stmt = $db->prepare("
     bh.name,
     bh.location,
     bh.city,
-    COALESCE(rp.room_price_min, bh.price_min) AS price_min,
-    COALESCE(rp.room_price_max, bh.price_max) AS price_max,
+    COALESCE(rp.room_price_min, (bh.price_min * $serviceFeeMultSql)) AS price_min,
+    COALESCE(rp.room_price_max, (COALESCE(bh.price_max, bh.price_min) * $serviceFeeMultSql)) AS price_max,
     bh.accommodation_type,
     bh.total_rooms,
     bh.available_rooms,
@@ -122,11 +126,14 @@ $listings = array_map(function ($r) {
         'available_rooms' => intval($r['available_rooms'] ?? 0),
         'status' => (string)($r['status'] ?? ''),
         'primary_image_url' => $img !== '' ? (UPLOAD_URL . sanitize($img)) : null,
-        'owner_plan_type' => (string)(['owner_plan_type'] ?? ''),
+        'owner_plan_type' => (string)($r['owner_plan_type'] ?? ''),
     ];
 }, $rows);
 
 jsonResponse(['data' => $listings]);
+
+
+
 
 
 

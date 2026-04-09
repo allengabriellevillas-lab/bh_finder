@@ -8,6 +8,7 @@ if (!$id) {
 }
 $db = getDB();
 $serviceFeePct = getServiceFeePercentage();
+$serviceFeeMult = 1 + ($serviceFeePct / 100.0);
 $userCols = [];
 try {
     $userCols = $db->query("SHOW COLUMNS FROM users")->fetchAll() ?: [];
@@ -221,8 +222,9 @@ $bhFullLocation = trim($bhLocation . (($bhLocation !== '' && $bhCity !== '') ? '
 $bhStatusUi = boardingHouseStatusUi((string)($bh['status'] ?? 'active'));
 $bhAvailableRooms = intval($bh['available_rooms'] ?? 0);
 $bhTotalRooms = intval($bh['total_rooms'] ?? 0);
-$bhPriceMin = $computedPriceMin;
-$bhPriceMax = $computedPriceMax;
+$bhPriceMin = $computedPriceMin * $serviceFeeMult;
+$bhPriceMax = $computedPriceMax !== null ? ((float)$computedPriceMax * $serviceFeeMult) : null;
+if ($bhPriceMax !== null && (float)$bhPriceMax <= $bhPriceMin) $bhPriceMax = null;
 $bhContactPhone = trim((string)($bh['contact_phone'] ?? ($bh['owner_phone'] ?? '')));
 $bhContactEmail = trim((string)($bh['contact_email'] ?? ($bh['owner_email'] ?? '')));
 $ownerName = (string)($bh['owner_name'] ?? 'Property Owner');
@@ -675,6 +677,7 @@ require_once __DIR__ . '/../includes/header.php';
 </div>
 
 <?php require_once __DIR__ . '/../includes/footer.php'; ?>
+
 
 
 

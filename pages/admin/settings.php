@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 require_once __DIR__ . '/_common.php';
 
 $pageTitle = 'System Settings';
@@ -10,6 +10,7 @@ $defaults = [
     'owner_verification_required' => '1',
     'listing_approval_required' => '1',
     'service_fee_percentage' => '5',
+    'referral_discount_codes' => '',
     'owner_subscription_days' => '30',
     'owner_subscription_basic_max_properties' => '2',
     'owner_subscription_amount_basic' => '999',
@@ -127,7 +128,7 @@ require_once __DIR__ . '/../../includes/header.php';
                   <tr>
                     <td><code><?= sanitize($r['key'] ?? '') ?></code></td>
                     <td style="white-space:pre-wrap"><?= sanitize($r['value'] ?? '') ?></td>
-                    <td class="text-muted text-sm"><?= !empty($r['updated_at']) ? sanitize(date('M d, Y H:i', strtotime((string)$r['updated_at']))) : '—' ?></td>
+                    <td class="text-muted text-sm"><?= !empty($r['updated_at']) ? sanitize(date('M d, Y H:i', strtotime((string)$r['updated_at']))) : 'â€”' ?></td>
                     <td>
                       <form method="POST" action="" style="display:inline">
                         <input type="hidden" name="action" value="delete">

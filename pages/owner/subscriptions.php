@@ -5,6 +5,7 @@ requireOwner();
 requireVerifiedOwner();
 
 $uid = intval($_SESSION['user_id'] ?? 0);
+
 $db = getDB();
 ensurePaymentsSubscriptionIdColumn();
 ensureOwnerSubscriptionTrialColumns();
@@ -20,6 +21,7 @@ $proPricing = ownerSubscriptionPricing('pro');
 $introActive = intval($basicPricing['is_intro'] ?? 0) === 1;
 $activeSub = getActiveOwnerSubscription($uid);
 $defaultPlan = strtolower(trim((string)($_GET['plan'] ?? '')));
+$refPrefill = trim((string)($_GET['ref'] ?? ($_GET['referral_code'] ?? '')));
 if (!in_array($defaultPlan, ['basic','pro'], true)) $defaultPlan = $activeSub ? strtolower((string)($activeSub['plan'] ?? 'basic')) : 'basic';
 if (!in_array($defaultPlan, ['basic','pro'], true)) $defaultPlan = 'basic';
 
@@ -55,6 +57,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $originalAmount = (float)($pricing['original'] ?? $amount);
         $isIntro = intval($pricing['is_intro'] ?? 0);
 
+        $referralCode = strtoupper(trim((string)($_POST['referral_code'] ?? '')));
+        $referralPct = 0.0;
+        $chargeAmount = $amount;
+        $referralNote = null;
+        if ($referralCode !== '') {
+            $refPrefill = $referralCode;
+            $referralPct = referralDiscountPct($referralCode);
+            if ($referralPct <= 0) {
+                $errors['referral_code'] = 'Invalid referral code.';
+            } else {
+                $chargeAmount = round(max(0.01, $amount * (1 - ($referralPct / 100.0))), 2);
+                $referralNote = 'Referral code: ' . $referralCode . ' (-' . rtrim(rtrim(number_format($referralPct, 2, '.', ''), '0'), '.') . '%)';
+            }
+        }
+
         $proof = null;
         if (!empty($_FILES['proof']['name'] ?? '')) {
             $proof = uploadImage($_FILES['proof'], 'sub_' . $uid);
@@ -77,8 +94,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $subId = intval($db->lastInsertId());
                 }
 
-                $insPay = $db->prepare("INSERT INTO payments (user_id, subscription_id, kind, plan, plan_type, original_price, paid_price, is_intro, amount, method, proof_path, status)
-                  VALUES (?,?,?,?,?,?,?,?,?,?,?, 'pending')");
+                $insPay = $db->prepare("INSERT INTO payments (user_id, subscription_id, kind, plan, plan_type, original_price, paid_price, is_intro, amount, method, proof_path, admin_note, status)
+                  VALUES (?,?,?,?,?,?,?,?,?,?,?,?, 'pending')");
                 $insPay->execute([
                     $uid,
                     $subId,
@@ -88,9 +105,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $originalAmount,
                     $amount,
                     $isIntro,
-                    $amount,
+                    $chargeAmount,
                     'proof_upload',
                     $proof,
+                    $referralNote,
                 ]);
 
                 $db->commit();
@@ -150,7 +168,7 @@ require_once __DIR__ . '/../../includes/header.php';
               <div class="flash flash-error mb-3"><i class="fas fa-exclamation-circle"></i><?= sanitize($errors['general']) ?></div>
             <?php endif; ?>
 
-            <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px">
+            <div class="owner-sub-summary">
               <div class="card" style="margin:0">
                 <div class="card-body">
                   <div class="text-muted text-xs">Status</div>
@@ -219,6 +237,11 @@ require_once __DIR__ . '/../../includes/header.php';
                         <option value="pro" <?= $defaultPlan === 'pro' ? 'selected' : '' ?>>Pro (<?= formatPrice((float)($proPricing['paid'] ?? 0)) ?><?= $introActive ? (' (Regular ' . formatPrice((float)($proPricing['original'] ?? 0)) . ')') : '' ?>, unlimited properties)</option>
                       </select>
                     </div>
+                  <div class="form-group" style="margin:0 0 10px">
+                    <label class="form-label">Referral code (optional)</label>
+                    <input type="text" name="referral_code" class="form-control" value="<?= sanitize($refPrefill) ?>" placeholder="e.g. WELCOME10">
+                    <?php if (!empty($errors['referral_code'])): ?><p class="form-error"><i class="fas fa-exclamation-circle"></i><?= sanitize($errors['referral_code']) ?></p><?php endif; ?>
+                  </div>
                   </div>
                   <button class="btn btn-primary" type="submit" title="<?= paypalEnabled() ? "Pay with PayPal Sandbox" : "PayPal is not configured yet. Click to see setup instructions." ?>">
                     <i class="fab fa-paypal"></i> Pay with PayPal (Sandbox)
@@ -235,12 +258,19 @@ require_once __DIR__ . '/../../includes/header.php';
                   <input type="hidden" name="plan" id="proofPlan" value="<?= sanitize($defaultPlan) ?>">
 
                   <div class="form-group" style="margin:0 0 12px">
+                    <label class="form-label">Referral code (optional)</label>
+                    <input type="text" name="referral_code" class="form-control" value="<?= sanitize($refPrefill) ?>" placeholder="e.g. WELCOME10">
+                    <?php if (!empty($errors['referral_code'])): ?><p class="form-error"><i class="fas fa-exclamation-circle"></i><?= sanitize($errors['referral_code']) ?></p><?php endif; ?>
+                  </div>
+
+                  <div class="form-group" style="margin:0 0 12px">
                     <label class="form-label">Receipt <span class="required">*</span></label>
-                    <div class="be-file <?= isset($errors['proof']) ? 'is-error' : '' ?>">
-                      <input id="proofFile" type="file" name="proof" accept="image/*" class="sr-only be-file-input" required>
-                      <label class="be-file-btn" for="proofFile"><i class="fas fa-upload"></i> Choose file</label>
-                      <span class="be-file-name" aria-live="polite"></span>
-                    </div>
+                    <div class="file-upload file-upload-compact <?= isset($errors['proof']) ? 'is-error' : '' ?>" aria-label="Upload receipt">
+  <input id="proofFile" type="file" name="proof" accept="image/*" required>
+  <div class="file-upload-icon"><i class="fas fa-cloud-upload-alt"></i></div>
+  <p class="file-upload-text"><strong>Click to upload</strong> or drag & drop</p>
+  <p class="file-upload-text file-upload-name" style="font-size:.76rem;margin-top:4px"></p>
+</div>
                     <?php if (!empty($errors['proof'])): ?><p class="form-error"><i class="fas fa-exclamation-circle"></i><?= sanitize($errors['proof']) ?></p><?php endif; ?>
                   </div>
 
@@ -302,6 +332,7 @@ require_once __DIR__ . '/../../includes/header.php';
 </div>
 
 <?php require_once __DIR__ . '/../../includes/footer.php'; ?>
+
 
 
 

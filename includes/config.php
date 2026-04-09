@@ -759,7 +759,7 @@ function isOwnerActive(int $ownerId): bool {
     return !!(getOwnerAccessInfo($ownerId)['active'] ?? false);
 }
 
-function startOwnerTrialIfMissing(int $ownerId, int $days = 14): bool {
+function startOwnerTrialIfMissing(int $ownerId, int $days = 5): bool {
     $ownerId = intval($ownerId);
     $days = max(1, intval($days));
     if ($ownerId <= 0) return false;
@@ -926,6 +926,45 @@ function ownerSubscriptionPricing(string $plan): array {
     ];
 }
 
+
+// ---- Referral / promo code helpers ----
+// Settings key: referral_discount_codes
+// Format: CODE=10, OTHER=5 (comma/newline/semicolon separated)
+function referralDiscountPct(string $code): float {
+    $code = strtoupper(trim($code));
+    $code = preg_replace('/[^A-Z0-9_\-]/', '', $code);
+    if ($code === '') return 0.0;
+    if (strlen($code) > 32) $code = substr($code, 0, 32);
+
+    $rawCodes = trim((string)(getSetting('referral_discount_codes', '') ?? ''));
+    if ($rawCodes === '') return 0.0;
+
+    $parts = preg_split('/[\s,;]+/', $rawCodes) ?: [];
+    foreach ($parts as $part) {
+        $part = trim((string)$part);
+        if ($part === '') continue;
+
+        $pct = 0.0;
+        $c = $part;
+        if (str_contains($part, '=')) {
+            [$c, $p] = explode('=', $part, 2);
+            $c = trim((string)$c);
+            $pct = floatval(trim((string)$p));
+        }
+
+        $c = strtoupper($c);
+        $c = preg_replace('/[^A-Z0-9_\-]/', '', $c);
+        if ($c === '') continue;
+
+        if ($c === $code) {
+            if ($pct < 0) $pct = 0;
+            if ($pct > 80) $pct = 80;
+            return (float)$pct;
+        }
+    }
+
+    return 0.0;
+}
 // Featured listing columns (Pro feature)
 function ensureFeaturedListingColumns(): void {
     static $done = false;
@@ -1414,6 +1453,7 @@ function ensureBoardingHouseDailyViewsTable(): void {
         // ignore
     }
 }
+
 
 
 

@@ -6,6 +6,11 @@ requireLogin();
 $pageTitle = 'My Favorites';
 $db = getDB();
 $uid = intval($_SESSION['user_id']);
+
+// Service fee is applied to room prices when showing ranges
+$serviceFeePct = getServiceFeePercentage();
+$serviceFeeMult = 1 + ($serviceFeePct / 100.0);
+$serviceFeeMultSql = number_format($serviceFeeMult, 6, '.', '');
 $userCols = [];
 try {
     $userCols = $db->query("SHOW COLUMNS FROM users")->fetchAll() ?: [];
@@ -42,7 +47,7 @@ if ($enforceRoomSub && $hasRoomSubscription) {
 }
 
 $roomPriceJoinSql = "LEFT JOIN (\n"
-    . "  SELECT boarding_house_id, MIN(price) AS room_price_min, MAX(price) AS room_price_max\n"
+    . "  SELECT boarding_house_id, MIN(price * $serviceFeeMultSql) AS room_price_min, MAX(price * $serviceFeeMultSql) AS room_price_max\n"
     . "  FROM rooms\n"
     . "  WHERE $roomPriceExtraWhere\n"
     . "  GROUP BY boarding_house_id\n"
@@ -189,8 +194,8 @@ require_once __DIR__ . '/../includes/header.php';
           </div>
 
           <?php
-            $pMin = $l['room_price_min'] !== null ? (float)$l['room_price_min'] : (float)($l['price_min'] ?? 0);
-            $pMaxRaw = $l['room_price_max'] !== null ? (float)$l['room_price_max'] : (!empty($l['price_max']) ? (float)$l['price_max'] : null);
+            $pMin = $l['room_price_min'] !== null ? (float)$l['room_price_min'] : ((float)($l['price_min'] ?? 0) * $serviceFeeMult);
+            $pMaxRaw = $l['room_price_max'] !== null ? (float)$l['room_price_max'] : (!empty($l['price_max']) ? ((float)$l['price_max'] * $serviceFeeMult) : null);
             $pMax = ($pMaxRaw !== null && $pMaxRaw > $pMin) ? $pMaxRaw : null;
           ?>
           <div class="property-price">
@@ -213,6 +218,9 @@ require_once __DIR__ . '/../includes/header.php';
 </div>
 
 <?php require_once __DIR__ . '/../includes/footer.php'; ?>
+
+
+
 
 
 
